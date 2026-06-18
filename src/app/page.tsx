@@ -19,6 +19,7 @@ import {
   Pie,
   Cell,
   Legend,
+  LabelList,
 } from 'recharts';
 import {
   DollarSign,
@@ -249,7 +250,7 @@ export default function DashboardPage() {
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={empresaGrafico} layout="vertical">
+                <BarChart data={empresaGrafico} layout="vertical" margin={{ right: 110 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
                   <XAxis
                     type="number"
@@ -268,7 +269,9 @@ export default function DashboardPage() {
                     labelStyle={{ color: '#ffffff' }}
                     itemStyle={{ color: '#ffffff' }}
                   />
-                  <Bar dataKey="Vendas" fill="#00205C" radius={[0, 4, 4, 0]} />
+                  <Bar dataKey="Vendas" fill="#00205C" radius={[0, 4, 4, 0]}>
+                    <LabelList dataKey="Vendas" position="right" formatter={(v: number) => formatBRL(v)} style={{ fontSize: 10, fill: '#64748b' }} />
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             )}

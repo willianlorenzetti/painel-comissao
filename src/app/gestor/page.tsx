@@ -5,7 +5,7 @@ import AppShell from '@/components/layout/AppShell';
 import { formatBRL, formatNumber, MESES, CORES_GRAFICO } from '@/lib/format';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Legend,
+  ResponsiveContainer, LabelList,
 } from 'recharts';
 import { ChevronDown, Download, Filter } from 'lucide-react';
 import { useUser } from '@/components/providers/UserProvider';
@@ -126,7 +126,6 @@ export default function GestorPage() {
   const top8Grafico = vendedoresFiltrados.slice(0, 8).map((v) => ({
     name: nomeAbrev(v.vendedor),
     Vendas: v.total_vendas,
-    Comissão: getFaixa(v.vendedor, v.total_vendas)?.comissao || 0,
   }));
 
   const exportCSV = () => {
@@ -272,15 +271,8 @@ export default function GestorPage() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                 <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} />
                 <YAxis
-                  yAxisId="vendas"
                   tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
                   tick={{ fontSize: 10, fill: '#64748b' }}
-                />
-                <YAxis
-                  yAxisId="comissao"
-                  orientation="right"
-                  tickFormatter={(v) => `${(v / 1000).toFixed(1)}k`}
-                  tick={{ fontSize: 10, fill: '#FFD700' }}
                 />
                 <Tooltip
                   formatter={(v, name) => [formatBRL(Number(v)), String(name)]}
@@ -288,9 +280,9 @@ export default function GestorPage() {
                   labelStyle={{ color: '#ffffff' }}
                   itemStyle={{ color: '#ffffff' }}
                 />
-                <Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} />
-                <Bar yAxisId="vendas" dataKey="Vendas" fill="#00205C" radius={[4, 4, 0, 0]} />
-                <Bar yAxisId="comissao" dataKey="Comissão" fill="#FFD700" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Vendas" fill="#00205C" radius={[4, 4, 0, 0]}>
+                  <LabelList dataKey="Vendas" position="top" formatter={(v: number) => formatBRL(v)} style={{ fontSize: 10, fill: '#64748b' }} />
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           )}

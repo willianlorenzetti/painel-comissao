@@ -6,7 +6,7 @@ import KPICard from '@/components/ui/KPICard';
 import { formatBRL, formatNumber, MESES, CORES_GRAFICO } from '@/lib/format';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, LineChart, Line, Cell,
+  ResponsiveContainer, LineChart, Line, Cell, LabelList,
 } from 'recharts';
 import { DollarSign, TrendingUp, ChevronDown, Search, User } from 'lucide-react';
 import { useUser } from '@/components/providers/UserProvider';
@@ -329,7 +329,7 @@ export default function VendedorPage() {
               <div className="h-48 flex items-center justify-center text-sm" style={{ color: '#94a3b8' }}>Carregando...</div>
             ) : (
               <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={subgrupoGrafico} layout="vertical">
+                <BarChart data={subgrupoGrafico} layout="vertical" margin={{ right: 110 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
                   <XAxis type="number" tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 10, fill: '#64748b' }} />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={110} />
@@ -343,6 +343,7 @@ export default function VendedorPage() {
                     {subgrupoGrafico.map((_, i) => (
                       <Cell key={i} fill={CORES_GRAFICO[i % CORES_GRAFICO.length]} />
                     ))}
+                    <LabelList dataKey="Vendas" position="right" formatter={(v: number) => formatBRL(v)} style={{ fontSize: 10, fill: '#64748b' }} />
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
