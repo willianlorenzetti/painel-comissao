@@ -7,22 +7,38 @@ import {
   User,
   Users,
   Settings,
+  ShieldCheck,
   ChevronLeft,
   ChevronRight,
-  Key,
 } from 'lucide-react';
+import Image from 'next/image';
 import { useState } from 'react';
+import { useUser } from '../providers/UserProvider';
+import type { Cargo } from '@/types/index';
 
-const navItems = [
-  { href: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { href: '/vendedor', icon: User, label: 'Vendedor' },
-  { href: '/gestor', icon: Users, label: 'Gestor' },
-  { href: '/configuracao', icon: Settings, label: 'Configuração' },
+const ALL_NAV = [
+  { href: '/',            icon: LayoutDashboard, label: 'Dashboard',   cargos: ['ADM'] as Cargo[] },
+  { href: '/vendedor',    icon: User,            label: 'Vendedor',    cargos: ['ADM', 'GESTOR', 'VENDEDOR'] as Cargo[] },
+  { href: '/gestor',      icon: Users,           label: 'Gestor',      cargos: ['ADM', 'GESTOR'] as Cargo[] },
+  { href: '/configuracao',icon: Settings,        label: 'Configuração',cargos: ['ADM'] as Cargo[] },
+  { href: '/usuarios',    icon: ShieldCheck,     label: 'Usuários',    cargos: ['ADM'] as Cargo[] },
 ];
+
+const CARGO_LABEL: Record<Cargo, string> = {
+  ADM: 'Administrador',
+  GESTOR: 'Gestor',
+  VENDEDOR: 'Vendedor',
+};
 
 export default function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const usuario = useUser();
+
+  const cargo = usuario && usuario !== 'loading' ? usuario.cargo : null;
+  const navItems = cargo
+    ? ALL_NAV.filter((item) => item.cargos.includes(cargo))
+    : [];
 
   return (
     <aside
@@ -35,19 +51,27 @@ export default function Sidebar() {
     >
       {/* Logo */}
       <div
-        className="flex items-center gap-3 px-4 py-5"
+        className="flex items-center gap-3 px-4 py-4"
         style={{ borderBottom: '1px solid #1a3a6e' }}
       >
         <div
-          className="flex items-center justify-center rounded-lg shrink-0"
-          style={{ width: 36, height: 36, background: '#FFD700' }}
+          className="shrink-0"
+          style={{ width: collapsed ? 40 : 64, height: collapsed ? 40 : 64, position: 'relative' }}
         >
-          <Key size={20} color="#00205C" strokeWidth={2.5} />
+          <Image
+            src="/logo.png"
+            alt="Dovale"
+            fill
+            style={{ objectFit: 'contain' }}
+            priority
+          />
         </div>
         {!collapsed && (
           <div>
-            <p className="font-bold text-white text-sm leading-tight">DOVALE</p>
-            <p className="text-xs" style={{ color: '#FFD700' }}>
+            <p
+              className="font-semibold tracking-widest uppercase"
+              style={{ color: '#FFD700', letterSpacing: '0.15em', fontSize: '10px' }}
+            >
               Comissões
             </p>
           </div>
@@ -88,23 +112,32 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Toggle */}
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        className="flex items-center justify-center py-3 w-full transition-colors"
-        style={{
-          borderTop: '1px solid #1a3a6e',
-          color: '#64748b',
-        }}
-        onMouseEnter={(e) =>
-          ((e.currentTarget as HTMLElement).style.color = '#FFD700')
-        }
-        onMouseLeave={(e) =>
-          ((e.currentTarget as HTMLElement).style.color = '#64748b')
-        }
-      >
-        {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-      </button>
+      {/* User info + Toggle */}
+      <div style={{ borderTop: '1px solid #1a3a6e' }}>
+        {!collapsed && usuario && usuario !== 'loading' && (
+          <div className="px-4 py-3">
+            <p className="text-xs font-semibold truncate" style={{ color: '#ffffff' }}>
+              {usuario.nome}
+            </p>
+            <p className="text-xs" style={{ color: '#FFD700' }}>
+              {CARGO_LABEL[usuario.cargo]}
+            </p>
+          </div>
+        )}
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          className="flex items-center justify-center py-2.5 w-full transition-colors"
+          style={{ color: '#64748b' }}
+          onMouseEnter={(e) =>
+            ((e.currentTarget as HTMLElement).style.color = '#FFD700')
+          }
+          onMouseLeave={(e) =>
+            ((e.currentTarget as HTMLElement).style.color = '#64748b')
+          }
+        >
+          {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+        </button>
+      </div>
     </aside>
   );
 }

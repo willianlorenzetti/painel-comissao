@@ -2,79 +2,108 @@
 
 import { useEffect, useState } from 'react';
 import AppShell from '@/components/layout/AppShell';
-import { formatBRL } from '@/lib/format';
-import { Save, Plus, CheckCircle, AlertCircle } from 'lucide-react';
+import { MESES } from '@/lib/format';
+import { Save, CheckCircle, AlertCircle, Calendar } from 'lucide-react';
+import { useUser } from '@/components/providers/UserProvider';
+import { useRouter } from 'next/navigation';
 
-interface ComissaoConfig {
-  id?: number;
-  setor: string;
-  percentual: number;
-  meta_mensal: number;
-  ativo: boolean;
+interface VendedorMeta {
+  nome_vendedor: string;
+  meta1_valor: number;
+  meta1_percentual: number;
+  meta2_valor: number;
+  meta2_percentual: number;
+  meta3_valor: number;
+  meta3_percentual: number;
 }
 
+const ANO_ATUAL = new Date().getFullYear();
+const ANOS_META = [ANO_ATUAL, ANO_ATUAL - 1, ANO_ATUAL - 2];
+
 export default function ConfiguracaoPage() {
-  const [setores, setSetores] = useState<string[]>([]);
-  const [configs, setConfigs] = useState<ComissaoConfig[]>([]);
-  const [editados, setEditados] = useState<Record<string, ComissaoConfig>>({});
-  const [saving, setSaving] = useState<Record<string, boolean>>({});
-  const [saved, setSaved] = useState<Record<string, boolean>>({});
-  const [novoSetor, setNovoSetor] = useState('');
+  const usuario = useUser();
+  const router = useRouter();
+
+  const [allVendedores, setAllVendedores] = useState<string[]>([]);
+  const [buscaVend, setBuscaVend] = useState('');
+  const [mesMeta, setMesMeta] = useState(new Date().getMonth() + 1);
+  const [anoMeta, setAnoMeta] = useState(new Date().getFullYear());
+  const [metasMensaisEdit, setMetasMensaisEdit] = useState<Record<string, VendedorMeta>>({});
+  const [savingMensais, setSavingMensais] = useState(false);
+  const [savedMensais, setSavedMensais] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([
-      fetch('/api/filtros').then((r) => r.json()),
-      fetch('/api/comissao').then((r) => r.json()),
-    ]).then(([filtros, comissoes]) => {
-      setSetores(filtros.setores || []);
-      const configMap: Record<string, ComissaoConfig> = {};
-      (comissoes as ComissaoConfig[]).forEach((c) => {
-        configMap[c.setor] = c;
+    if (usuario && usuario !== 'loading' && usuario.cargo !== 'ADM') {
+      router.push('/sem-acesso');
+    }
+  }, [usuario, router]);
+
+  useEffect(() => {
+    if (!usuario || usuario === 'loading') return;
+    fetch('/api/filtros')
+      .then((r) => r.json())
+      .then((filtros) => {
+        setAllVendedores(filtros.vendedores || []);
+        setLoading(false);
       });
-      setConfigs(comissoes);
-      setEditados(configMap);
-      setLoading(false);
-    });
-  }, []);
+  }, [usuario]);
 
-  const getConfig = (setor: string): ComissaoConfig =>
-    editados[setor] || { setor, percentual: 0, meta_mensal: 0, ativo: true };
+  useEffect(() => {
+    if (!usuario || usuario === 'loading') return;
+    carregarMetasMensais(anoMeta, mesMeta);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [anoMeta, mesMeta, usuario]);
 
-  const updateField = (setor: string, field: keyof ComissaoConfig, value: number | boolean) => {
-    setEditados((prev) => ({
-      ...prev,
-      [setor]: { ...getConfig(setor), [field]: value },
-    }));
-    setSaved((prev) => ({ ...prev, [setor]: false }));
+  const getMensal = (nome: string): VendedorMeta =>
+    metasMensaisEdit[nome] || {
+      nome_vendedor: nome,
+      meta1_valor: 0, meta1_percentual: 0,
+      meta2_valor: 0, meta2_percentual: 0,
+      meta3_valor: 0, meta3_percentual: 0,
+    };
+
+  const updateMensal = (
+    nome: string,
+    field: keyof Omit<VendedorMeta, 'nome_vendedor'>,
+    value: number
+  ) => {
+    setSavedMensais(false);
+    setMetasMensaisEdit((prev) => ({ ...prev, [nome]: { ...getMensal(nome), [field]: value } }));
   };
 
-  const salvar = async (setor: string) => {
-    setSaving((prev) => ({ ...prev, [setor]: true }));
+  const carregarMetasMensais = async (ano: number, mes: number) => {
     try {
-      const config = getConfig(setor);
-      await fetch('/api/comissao', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
-      });
-      setSaved((prev) => ({ ...prev, [setor]: true }));
-      setTimeout(() => setSaved((prev) => ({ ...prev, [setor]: false })), 3000);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setSaving((prev) => ({ ...prev, [setor]: false }));
+      const res = await fetch(`/api/metas-mensais?ano=${ano}&mes=${mes}`);
+      const list: VendedorMeta[] = await res.json();
+      const map: Record<string, VendedorMeta> = {};
+      list.forEach((m) => { map[m.nome_vendedor] = m; });
+      setMetasMensaisEdit(map);
+    } catch {
+      // silently fail
     }
   };
 
-  const adicionarSetor = () => {
-    if (!novoSetor.trim() || setores.includes(novoSetor)) return;
-    setSetores((prev) => [...prev, novoSetor]);
-    setNovoSetor('');
+  const salvarMetasMensais = async () => {
+    setSavingMensais(true);
+    try {
+      const payload = allVendedores.map((v) => ({
+        ...getMensal(v),
+        nome_vendedor: v,
+        ano: anoMeta,
+        mes: mesMeta,
+      }));
+      await fetch('/api/metas-mensais', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      setSavedMensais(true);
+      setTimeout(() => setSavedMensais(false), 3000);
+    } finally {
+      setSavingMensais(false);
+    }
   };
-
-  const setoresComConfig = setores.filter((s) => editados[s]);
-  const setoresSemConfig = setores.filter((s) => !editados[s]);
 
   return (
     <AppShell>
@@ -82,235 +111,206 @@ export default function ConfiguracaoPage() {
         {/* Header */}
         <div>
           <h1 className="text-2xl font-bold" style={{ color: '#00205C' }}>
-            Configuração de Comissões
+            Metas Mensais
           </h1>
-          <p className="text-sm" style={{ color: '#64748b' }}>
-            Defina as taxas e metas por setor de venda
+          <p className="text-sm mt-0.5" style={{ color: '#64748b' }}>
+            Configure as metas de cada vendedor por mês e ano
           </p>
         </div>
 
-        {/* Info Banner */}
+        {/* Seletores de mês/ano */}
+        <div
+          className="rounded-xl p-4 flex items-center gap-5 flex-wrap"
+          style={{ background: '#ffffff', border: '2px solid #00205C' }}
+        >
+          <div className="flex items-center gap-2 shrink-0">
+            <Calendar size={18} style={{ color: '#00205C' }} />
+            <span className="text-sm font-semibold" style={{ color: '#00205C' }}>
+              Selecione o período de referência:
+            </span>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex flex-col gap-0.5">
+              <label className="text-xs font-medium uppercase tracking-wide" style={{ color: '#64748b' }}>Mês</label>
+              <select
+                value={mesMeta}
+                onChange={(e) => setMesMeta(parseInt(e.target.value))}
+                className="rounded-lg px-3 py-2 text-sm font-semibold outline-none cursor-pointer"
+                style={{ border: '1px solid #cbd5e1', color: '#00205C', minWidth: 140 }}
+              >
+                {MESES.map((m, i) => (
+                  <option key={i + 1} value={i + 1}>{m}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <label className="text-xs font-medium uppercase tracking-wide" style={{ color: '#64748b' }}>Ano</label>
+              <select
+                value={anoMeta}
+                onChange={(e) => setAnoMeta(parseInt(e.target.value))}
+                className="rounded-lg px-3 py-2 text-sm font-semibold outline-none cursor-pointer"
+                style={{ border: '1px solid #cbd5e1', color: '#00205C', minWidth: 100 }}
+              >
+                {ANOS_META.map((a) => (
+                  <option key={a} value={a}>{a}</option>
+                ))}
+              </select>
+            </div>
+            <div
+              className="px-3 py-1.5 rounded-lg text-sm font-bold mt-4"
+              style={{ background: '#00205C', color: '#FFD700' }}
+            >
+              {MESES[mesMeta - 1]} {anoMeta}
+            </div>
+          </div>
+        </div>
+
         <div
           className="rounded-xl p-4 flex items-start gap-3"
           style={{ background: '#0a1628', border: '1px solid #1a3a6e' }}
         >
           <AlertCircle size={18} style={{ color: '#FFD700' }} className="shrink-0 mt-0.5" />
-          <div>
-            <p className="text-sm font-medium text-white">Como funciona</p>
-            <p className="text-xs mt-1" style={{ color: '#94a3b8' }}>
-              Configure o percentual de comissão e a meta mensal para cada setor.
-              Os valores serão usados nas telas do Vendedor e Gestor para calcular
-              comissões estimadas e atingimento de metas.
-            </p>
-          </div>
-        </div>
-
-        {/* Adicionar setor manual */}
-        <div
-          className="rounded-xl p-5 shadow-sm"
-          style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}
-        >
-          <h2 className="text-sm font-semibold mb-3" style={{ color: '#00205C' }}>
-            Adicionar Setor Personalizado
-          </h2>
-          <div className="flex gap-3">
-            <input
-              type="text"
-              value={novoSetor}
-              onChange={(e) => setNovoSetor(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && adicionarSetor()}
-              placeholder="Nome do setor..."
-              className="flex-1 rounded-lg px-3 py-2 text-sm outline-none"
-              style={{ border: '1px solid #e2e8f0', color: '#00205C' }}
-            />
-            <button
-              onClick={adicionarSetor}
-              className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium"
-              style={{ background: '#00205C', color: '#FFD700' }}
-            >
-              <Plus size={15} />
-              Adicionar
-            </button>
-          </div>
+          <p className="text-xs" style={{ color: '#94a3b8' }}>
+            Configure até <strong className="text-white">3 faixas de meta</strong> por vendedor para o mês selecionado,
+            cada uma com seu próprio <strong className="text-white">% de comissão</strong>.
+            O vendedor recebe a comissão da faixa mais alta que atingir.
+          </p>
         </div>
 
         {loading ? (
-          <div className="text-center py-12" style={{ color: '#94a3b8' }}>
-            Carregando configurações...
-          </div>
+          <div className="text-center py-12" style={{ color: '#94a3b8' }}>Carregando...</div>
         ) : (
-          <>
-            {/* Setores COM configuração */}
-            {setoresComConfig.length > 0 && (
-              <div className="space-y-3">
-                <h2 className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#64748b' }}>
-                  Setores configurados ({setoresComConfig.length})
-                </h2>
-                {setoresComConfig.map((setor) => {
-                  const cfg = getConfig(setor);
-                  return (
-                    <SetorRow
-                      key={setor}
-                      setor={setor}
-                      config={cfg}
-                      saving={!!saving[setor]}
-                      saved={!!saved[setor]}
-                      onChange={(field, value) => updateField(setor, field, value)}
-                      onSave={() => salvar(setor)}
-                    />
-                  );
-                })}
-              </div>
-            )}
+          <div
+            className="rounded-xl shadow-sm overflow-hidden"
+            style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}
+          >
+            {/* Toolbar */}
+            <div
+              className="flex items-center justify-between px-5 py-4 gap-3 flex-wrap"
+              style={{ borderBottom: '1px solid #e2e8f0' }}
+            >
+              <input
+                type="text"
+                value={buscaVend}
+                onChange={(e) => setBuscaVend(e.target.value)}
+                placeholder="Buscar vendedor..."
+                className="rounded-lg px-3 py-1.5 text-sm outline-none"
+                style={{ border: '1px solid #e2e8f0', color: '#0a1628', width: 220 }}
+              />
+              <button
+                onClick={salvarMetasMensais}
+                disabled={savingMensais}
+                className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-all"
+                style={{
+                  background: savedMensais ? '#16a34a' : '#FFD700',
+                  color: savedMensais ? '#ffffff' : '#00205C',
+                  opacity: savingMensais ? 0.7 : 1,
+                }}
+              >
+                {savedMensais ? <><CheckCircle size={15} /> Salvo!</> : <><Save size={15} /> Salvar Tudo</>}
+              </button>
+            </div>
 
-            {/* Setores SEM configuração */}
-            {setoresSemConfig.length > 0 && (
-              <div className="space-y-3">
-                <h2 className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#64748b' }}>
-                  Setores sem configuração ({setoresSemConfig.length})
-                </h2>
-                {setoresSemConfig.map((setor) => {
-                  const cfg = getConfig(setor);
-                  return (
-                    <SetorRow
-                      key={setor}
-                      setor={setor}
-                      config={cfg}
-                      saving={!!saving[setor]}
-                      saved={!!saved[setor]}
-                      onChange={(field, value) => updateField(setor, field, value)}
-                      onSave={() => salvar(setor)}
-                    />
-                  );
-                })}
-              </div>
-            )}
-          </>
+            {/* Header das faixas */}
+            <div
+              className="grid px-5 py-2 text-xs font-semibold uppercase tracking-wider"
+              style={{
+                gridTemplateColumns: '1fr repeat(3, 280px)',
+                borderBottom: '1px solid #f1f5f9',
+                background: '#f8fafc',
+                color: '#64748b',
+              }}
+            >
+              <span>Vendedor</span>
+              {(['Meta 1', 'Meta 2', 'Meta 3'] as const).map((label, i) => (
+                <span
+                  key={i}
+                  className="text-center px-4 py-1 rounded-full mx-2"
+                  style={{
+                    background: ['#dbeafe','#d1fae5','#fef3c7'][i],
+                    color: ['#1e40af','#065f46','#92400e'][i],
+                  }}
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+
+            {/* Linhas */}
+            <div className="divide-y" style={{ borderColor: '#f1f5f9' }}>
+              {allVendedores.filter((v) => !buscaVend || v.toLowerCase().includes(buscaVend.toLowerCase())).map((v) => {
+                const m = getMensal(v);
+                const temMetaMensal = !!metasMensaisEdit[v];
+                return (
+                  <div
+                    key={v}
+                    className="grid items-center px-5 py-3"
+                    style={{ gridTemplateColumns: '1fr repeat(3, 280px)' }}
+                    onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = '#f8fafc')}
+                    onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = '')}
+                  >
+                    {/* Nome */}
+                    <div className="flex items-center gap-2 pr-4">
+                      <span className="text-sm font-medium" style={{ color: '#0a1628' }}>{v}</span>
+                      {temMetaMensal && (
+                        <span
+                          className="text-xs px-1.5 py-0.5 rounded-full shrink-0"
+                          style={{ background: '#d1fae5', color: '#065f46' }}
+                        >
+                          mensal
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Faixas 1, 2, 3 */}
+                    {([
+                      { vField: 'meta1_valor', pField: 'meta1_percentual', bg: '#eff6ff', border: '#bfdbfe' },
+                      { vField: 'meta2_valor', pField: 'meta2_percentual', bg: '#f0fdf4', border: '#bbf7d0' },
+                      { vField: 'meta3_valor', pField: 'meta3_percentual', bg: '#fffbeb', border: '#fde68a' },
+                    ] as { vField: keyof Omit<VendedorMeta,'nome_vendedor'>; pField: keyof Omit<VendedorMeta,'nome_vendedor'>; bg: string; border: string }[]).map(({ vField, pField, bg, border }) => {
+                      const val = m[vField] as number;
+                      const pct = m[pField] as number;
+                      return (
+                        <div
+                          key={vField}
+                          className="flex items-center gap-2 mx-2 px-3 py-2 rounded-lg"
+                          style={{ background: bg, border: `1px solid ${border}` }}
+                        >
+                          <span className="text-xs shrink-0" style={{ color: '#64748b' }}>R$</span>
+                          <input
+                            type="number"
+                            min={0}
+                            step={1000}
+                            value={val}
+                            onChange={(e) => updateMensal(v, vField, parseFloat(e.target.value) || 0)}
+                            className="flex-1 min-w-0 rounded px-2 py-1 text-xs text-right outline-none bg-transparent font-medium"
+                            style={{ border: '1px solid #e2e8f0', color: '#0a1628', background: '#ffffff' }}
+                            placeholder="0"
+                            onFocus={(e) => e.target.select()}
+                          />
+                          <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step={0.5}
+                            value={pct}
+                            onChange={(e) => updateMensal(v, pField, parseFloat(e.target.value) || 0)}
+                            className="w-16 rounded px-2 py-1 text-xs text-center outline-none font-bold"
+                            style={{ border: '1px solid #e2e8f0', color: '#00205C', background: '#ffffff' }}
+                            placeholder="0"
+                            onFocus={(e) => e.target.select()}
+                          />
+                          <span className="text-xs shrink-0 font-medium" style={{ color: '#64748b' }}>%</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         )}
       </div>
     </AppShell>
-  );
-}
-
-function SetorRow({
-  setor, config, saving, saved, onChange, onSave,
-}: {
-  setor: string;
-  config: ComissaoConfig;
-  saving: boolean;
-  saved: boolean;
-  onChange: (field: keyof ComissaoConfig, value: number | boolean) => void;
-  onSave: () => void;
-}) {
-  const comissaoExemplo = config.meta_mensal > 0
-    ? (config.meta_mensal * config.percentual) / 100
-    : null;
-
-  return (
-    <div
-      className="rounded-xl p-4 shadow-sm"
-      style={{
-        background: '#ffffff',
-        border: `1px solid ${saved ? '#16a34a' : '#e2e8f0'}`,
-        transition: 'border-color 0.3s',
-      }}
-    >
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <div
-            className="rounded-lg px-3 py-1"
-            style={{ background: '#f0f4f8' }}
-          >
-            <p className="text-sm font-semibold" style={{ color: '#00205C' }}>{setor}</p>
-          </div>
-          {comissaoExemplo && (
-            <p className="text-xs" style={{ color: '#64748b' }}>
-              → comissão na meta: <span className="font-semibold" style={{ color: '#16a34a' }}>{formatBRL(comissaoExemplo)}</span>
-            </p>
-          )}
-        </div>
-
-        <div className="flex items-center gap-3 flex-wrap">
-          {/* Toggle ativo */}
-          <label className="flex items-center gap-2 cursor-pointer">
-            <div
-              onClick={() => onChange('ativo', !config.ativo)}
-              className="relative rounded-full transition-colors cursor-pointer"
-              style={{
-                width: 36,
-                height: 20,
-                background: config.ativo ? '#00205C' : '#e2e8f0',
-              }}
-            >
-              <div
-                className="absolute top-1 rounded-full transition-all"
-                style={{
-                  width: 12,
-                  height: 12,
-                  background: '#ffffff',
-                  left: config.ativo ? 20 : 4,
-                }}
-              />
-            </div>
-            <span className="text-xs" style={{ color: '#64748b' }}>
-              {config.ativo ? 'Ativo' : 'Inativo'}
-            </span>
-          </label>
-
-          {/* % comissão */}
-          <div className="flex items-center gap-1.5">
-            <label className="text-xs font-medium" style={{ color: '#64748b' }}>
-              % Comissão:
-            </label>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              step={0.5}
-              value={config.percentual}
-              onChange={(e) => onChange('percentual', parseFloat(e.target.value) || 0)}
-              className="w-16 rounded-lg px-2 py-1.5 text-sm text-center outline-none font-semibold"
-              style={{ border: '1px solid #e2e8f0', color: '#00205C' }}
-            />
-            <span className="text-sm" style={{ color: '#64748b' }}>%</span>
-          </div>
-
-          {/* Meta mensal */}
-          <div className="flex items-center gap-1.5">
-            <label className="text-xs font-medium" style={{ color: '#64748b' }}>
-              Meta mensal:
-            </label>
-            <span className="text-sm" style={{ color: '#64748b' }}>R$</span>
-            <input
-              type="number"
-              min={0}
-              step={1000}
-              value={config.meta_mensal}
-              onChange={(e) => onChange('meta_mensal', parseFloat(e.target.value) || 0)}
-              className="w-28 rounded-lg px-2 py-1.5 text-sm text-right outline-none"
-              style={{ border: '1px solid #e2e8f0', color: '#00205C' }}
-            />
-          </div>
-
-          {/* Salvar */}
-          <button
-            onClick={onSave}
-            disabled={saving}
-            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-all"
-            style={{
-              background: saved ? '#16a34a' : saving ? '#94a3b8' : '#00205C',
-              color: saved ? '#ffffff' : '#FFD700',
-              cursor: saving ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {saved ? (
-              <><CheckCircle size={14} /> Salvo</>
-            ) : (
-              <><Save size={14} /> {saving ? 'Salvando...' : 'Salvar'}</>
-            )}
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }

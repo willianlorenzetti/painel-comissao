@@ -50,6 +50,19 @@ export interface ComissaoConfig {
   ativo: boolean;
 }
 
+export type Cargo = 'ADM' | 'GESTOR' | 'VENDEDOR';
+
+export interface UsuarioPermissao {
+  id: number;
+  email: string;
+  nome: string;
+  cargo: Cargo;
+  setores: string[];
+  nome_vendedor: string | null;
+  ativo: boolean;
+  criado_em?: string;
+}
+
 export interface DashboardSummary {
   total_vendas: number;
   total_vendas_mes: number;

@@ -32,6 +32,16 @@ import {
 const ANO_ATUAL = new Date().getFullYear();
 const ANOS = [ANO_ATUAL, ANO_ATUAL - 1, ANO_ATUAL - 2];
 
+function TooltipPie({ active, payload }: { active?: boolean; payload?: Array<{ name: string; value: number }> }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{ background: '#0a1628', borderRadius: 8, padding: '8px 12px', fontSize: 11 }}>
+      <p style={{ color: '#ffffff', fontWeight: 600, marginBottom: 4 }}>{payload[0].name}</p>
+      <p style={{ color: '#FFD700' }}>Vendas: {formatBRL(payload[0].value)}</p>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -181,6 +191,8 @@ export default function DashboardPage() {
                   <Tooltip
                     formatter={(v) => [formatBRL(Number(v)), 'Vendas']}
                     contentStyle={{ background: '#0a1628', border: 'none', borderRadius: 8, color: '#fff' }}
+                    labelStyle={{ color: '#ffffff' }}
+                    itemStyle={{ color: '#ffffff' }}
                   />
                   <Line
                     type="monotone"
@@ -214,10 +226,7 @@ export default function DashboardPage() {
                       <Cell key={index} fill={CORES_GRAFICO[index % CORES_GRAFICO.length]} />
                     ))}
                   </Pie>
-                  <Tooltip
-                    formatter={(v) => [formatBRL(Number(v)), 'Vendas']}
-                    contentStyle={{ background: '#0a1628', border: 'none', borderRadius: 8, color: '#fff', fontSize: 11 }}
-                  />
+                  <Tooltip content={<TooltipPie />} />
                   <Legend iconSize={8} wrapperStyle={{ fontSize: 10, color: '#64748b' }} />
                 </PieChart>
               </ResponsiveContainer>
@@ -256,6 +265,8 @@ export default function DashboardPage() {
                   <Tooltip
                     formatter={(v) => [formatBRL(Number(v)), 'Vendas']}
                     contentStyle={{ background: '#0a1628', border: 'none', borderRadius: 8, color: '#fff' }}
+                    labelStyle={{ color: '#ffffff' }}
+                    itemStyle={{ color: '#ffffff' }}
                   />
                   <Bar dataKey="Vendas" fill="#00205C" radius={[0, 4, 4, 0]} />
                 </BarChart>

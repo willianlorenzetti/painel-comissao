@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPool, sql } from '@/lib/db';
+import { getUsuario, isADM } from '@/lib/permissions';
 
 async function ensureTable() {
   const pool = await getPool();
@@ -17,7 +18,13 @@ async function ensureTable() {
   `);
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const email = req.headers.get('x-user-email');
+  if (!email) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 });
+
+  const usuario = await getUsuario(email);
+  if (!usuario) return NextResponse.json({ error: 'Sem permissão' }, { status: 403 });
+
   try {
     await ensureTable();
     const pool = await getPool();
@@ -32,6 +39,14 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const email = req.headers.get('x-user-email');
+  if (!email) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 });
+
+  const usuario = await getUsuario(email);
+  if (!usuario || !isADM(usuario.cargo)) {
+    return NextResponse.json({ error: 'Apenas ADM pode alterar configurações' }, { status: 403 });
+  }
+
   try {
     await ensureTable();
     const body = await req.json();
@@ -48,11 +63,10 @@ export async function POST(req: NextRequest) {
         .input('setor', sql.VarChar, body.setor)
         .input('percentual', sql.Decimal(5, 2), body.percentual)
         .input('meta_mensal', sql.Decimal(18, 2), body.meta_mensal)
-        .input('ativo', sql.Bit, body.ativo ? 1 : 0).query(`
+        .input('ativo', sql.Bit, body.ativo ? 1 : 0)
+        .query(`
           UPDATE ComissaoConfig
-          SET percentual = @percentual,
-              meta_mensal = @meta_mensal,
-              ativo = @ativo,
+          SET percentual = @percentual, meta_mensal = @meta_mensal, ativo = @ativo,
               atualizado_em = GETDATE()
           WHERE setor = @setor
         `);
@@ -62,7 +76,8 @@ export async function POST(req: NextRequest) {
         .input('setor', sql.VarChar, body.setor)
         .input('percentual', sql.Decimal(5, 2), body.percentual)
         .input('meta_mensal', sql.Decimal(18, 2), body.meta_mensal)
-        .input('ativo', sql.Bit, body.ativo ? 1 : 0).query(`
+        .input('ativo', sql.Bit, body.ativo ? 1 : 0)
+        .query(`
           INSERT INTO ComissaoConfig (setor, percentual, meta_mensal, ativo)
           VALUES (@setor, @percentual, @meta_mensal, @ativo)
         `);

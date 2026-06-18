@@ -8,6 +8,8 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { ChevronDown, Download, Filter } from 'lucide-react';
+import { useUser } from '@/components/providers/UserProvider';
+import { useRouter } from 'next/navigation';
 
 const ANO_ATUAL = new Date().getFullYear();
 const ANOS = [ANO_ATUAL, ANO_ATUAL - 1, ANO_ATUAL - 2];
@@ -21,15 +23,18 @@ interface ResumoVendedor {
   total_registros: number;
 }
 
-interface ComissaoConfig {
-  setor: string;
-  percentual: number;
-  meta_mensal: number;
+interface MetaVendedor {
+  nome_vendedor: string;
+  meta1_valor: number; meta1_percentual: number;
+  meta2_valor: number; meta2_percentual: number;
+  meta3_valor: number; meta3_percentual: number;
 }
 
 export default function GestorPage() {
+  const usuario = useUser();
+  const router = useRouter();
   const [vendedores, setVendedores] = useState<ResumoVendedor[]>([]);
-  const [comissoes, setComissoes] = useState<ComissaoConfig[]>([]);
+  const [metasMap, setMetasMap] = useState<Record<string, MetaVendedor>>({});
   const [setores, setSetores] = useState<string[]>([]);
   const [empresas, setEmpresas] = useState<string[]>([]);
   const [filtroSetor, setFiltroSetor] = useState('');
@@ -40,17 +45,33 @@ export default function GestorPage() {
   const [busca, setBusca] = useState('');
 
   useEffect(() => {
+    if (usuario && usuario !== 'loading' && usuario.cargo === 'VENDEDOR') {
+      router.push('/vendedor');
+    }
+  }, [usuario, router]);
+
+  useEffect(() => {
     fetch('/api/filtros')
       .then((r) => r.json())
       .then((d) => {
         setSetores(d.setores || []);
         setEmpresas(d.empresas || []);
       });
-    fetch('/api/comissao')
-      .then((r) => r.json())
-      .then(setComissoes)
-      .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const url = mes
+      ? `/api/metas-mensais?ano=${ano}&mes=${mes}`
+      : '/api/metas';
+    fetch(url)
+      .then((r) => r.json())
+      .then((list: MetaVendedor[]) => {
+        const map: Record<string, MetaVendedor> = {};
+        list.forEach((m) => { map[m.nome_vendedor] = m; });
+        setMetasMap(map);
+      })
+      .catch(() => {});
+  }, [ano, mes]);
 
   useEffect(() => {
     setLoading(true);
@@ -66,10 +87,23 @@ export default function GestorPage() {
       .finally(() => setLoading(false));
   }, [ano, mes, filtroSetor, filtroEmpresa]);
 
-  const getComissao = (setor: string, totalVendas: number) => {
-    const cfg = comissoes.find((c) => c.setor === setor);
-    if (!cfg) return null;
-    return { valor: (totalVendas * cfg.percentual) / 100, percentual: cfg.percentual, meta: cfg.meta_mensal };
+  const getFaixa = (vendedor: string, totalVendas: number) => {
+    const m = metasMap[vendedor];
+    if (!m) return null;
+    const tiers = [
+      { label: 'Meta 3', valor: Number(m.meta3_valor), percentual: Number(m.meta3_percentual) },
+      { label: 'Meta 2', valor: Number(m.meta2_valor), percentual: Number(m.meta2_percentual) },
+      { label: 'Meta 1', valor: Number(m.meta1_valor), percentual: Number(m.meta1_percentual) },
+    ];
+    const atingida = tiers.find((t) => t.valor > 0 && totalVendas >= t.valor) || null;
+    // Próxima meta não atingida (para barra de progresso)
+    const proxima = [...tiers].reverse().find((t) => t.valor > 0 && totalVendas < t.valor) || null;
+    const referencia = proxima?.valor || atingida?.valor || 0;
+    return {
+      atingida,
+      referencia,
+      comissao: atingida ? (totalVendas * atingida.percentual) / 100 : null,
+    };
   };
 
   const vendedoresFiltrados = vendedores.filter((v) =>
@@ -78,26 +112,32 @@ export default function GestorPage() {
 
   const totalVendas = vendedoresFiltrados.reduce((s, v) => s + v.total_vendas, 0);
   const totalComissoes = vendedoresFiltrados.reduce((s, v) => {
-    const c = getComissao(v.setor, v.total_vendas);
-    return s + (c?.valor || 0);
+    const f = getFaixa(v.vendedor, v.total_vendas);
+    return s + (f?.comissao || 0);
   }, 0);
 
+  // Remove o prefixo do setor (primeira palavra) e trunca o restante
+  const nomeAbrev = (vendedor: string) => {
+    const partes = vendedor.split(' ');
+    const nome = partes.slice(1).join(' ') || partes[0];
+    return nome.length > 14 ? nome.substring(0, 14) + '…' : nome;
+  };
+
   const top8Grafico = vendedoresFiltrados.slice(0, 8).map((v) => ({
-    name: v.vendedor.split(' ')[0],
+    name: nomeAbrev(v.vendedor),
     Vendas: v.total_vendas,
-    Comissão: getComissao(v.setor, v.total_vendas)?.valor || 0,
+    Comissão: getFaixa(v.vendedor, v.total_vendas)?.comissao || 0,
   }));
 
   const exportCSV = () => {
-    const header = ['Vendedor', 'Setor', 'Empresa', 'Total Vendas', 'Qtde', 'Comissão (R$)', '% Comissão', 'Meta'].join(';');
+    const header = ['Vendedor', 'Setor', 'Total Vendas', 'Meta Atingida', 'Comissão (R$)'].join(';');
     const rows = vendedoresFiltrados.map((v) => {
-      const c = getComissao(v.setor, v.total_vendas);
+      const f = getFaixa(v.vendedor, v.total_vendas);
       return [
-        v.vendedor, v.setor, v.empresa,
-        v.total_vendas.toFixed(2), v.total_qtde,
-        c ? c.valor.toFixed(2) : '-',
-        c ? c.percentual : '-',
-        c ? c.meta.toFixed(2) : '-',
+        v.vendedor, v.setor,
+        v.total_vendas.toFixed(2),
+        f?.atingida?.label || '-',
+        f?.comissao != null ? f.comissao.toFixed(2) : '-',
       ].join(';');
     });
     const csv = [header, ...rows].join('\n');
@@ -262,9 +302,17 @@ export default function GestorPage() {
             <table className="w-full text-xs">
               <thead>
                 <tr style={{ background: '#f8fafc' }}>
-                  {['#', 'Vendedor', 'Setor', 'Empresa', 'Total Vendas', 'Qtde', '% Comissão', 'Comissão Est.', 'Meta', 'Atingimento'].map((h) => (
-                    <th key={h} className="text-left px-4 py-3 font-semibold" style={{ color: '#64748b' }}>
-                      {h}
+                  {[
+                    { label: '#', align: 'left' },
+                    { label: 'Vendedor', align: 'left' },
+                    { label: 'Setor', align: 'left' },
+                    { label: 'Total Vendas', align: 'center' },
+                    { label: 'Meta Atingida', align: 'left' },
+                    { label: 'Comissão Est.', align: 'left' },
+                    { label: 'Atingimento', align: 'left' },
+                  ].map(({ label, align }) => (
+                    <th key={label} className={`text-${align} px-4 py-3 font-semibold`} style={{ color: '#64748b' }}>
+                      {label}
                     </th>
                   ))}
                 </tr>
@@ -272,16 +320,16 @@ export default function GestorPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={10} className="text-center py-8" style={{ color: '#94a3b8' }}>Carregando...</td>
+                    <td colSpan={7} className="text-center py-8" style={{ color: '#94a3b8' }}>Carregando...</td>
                   </tr>
                 ) : vendedoresFiltrados.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="text-center py-8" style={{ color: '#94a3b8' }}>Nenhum vendedor encontrado</td>
+                    <td colSpan={7} className="text-center py-8" style={{ color: '#94a3b8' }}>Nenhum vendedor encontrado</td>
                   </tr>
                 ) : (
                   vendedoresFiltrados.map((v, i) => {
-                    const c = getComissao(v.setor, v.total_vendas);
-                    const pct = c?.meta ? Math.min((v.total_vendas / c.meta) * 100, 100) : 0;
+                    const f = getFaixa(v.vendedor, v.total_vendas);
+                    const pct = f?.referencia ? Math.min((v.total_vendas / f.referencia) * 100, 100) : 0;
                     return (
                       <tr
                         key={i}
@@ -292,47 +340,38 @@ export default function GestorPage() {
                         <td className="px-4 py-3 font-bold" style={{ color: i < 3 ? '#FFD700' : '#94a3b8' }}>
                           {i + 1}
                         </td>
-                        <td className="px-4 py-3 font-medium max-w-[180px] truncate" style={{ color: '#0a1628' }}>
+                        <td className="px-4 py-3 font-medium" style={{ color: '#0a1628', maxWidth: 200 }}>
                           {v.vendedor}
                         </td>
                         <td className="px-4 py-3" style={{ color: '#64748b' }}>{v.setor}</td>
-                        <td className="px-4 py-3" style={{ color: '#64748b' }}>{v.empresa}</td>
-                        <td className="px-4 py-3 text-right font-semibold" style={{ color: '#00205C' }}>
+                        <td className="px-4 py-3 text-center font-semibold" style={{ color: '#00205C' }}>
                           {formatBRL(v.total_vendas)}
                         </td>
-                        <td className="px-4 py-3 text-right" style={{ color: '#64748b' }}>
-                          {formatNumber(v.total_qtde)}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          {c ? (
-                            <span className="px-2 py-0.5 rounded-full text-xs font-semibold" style={{ background: '#f0f4f8', color: '#00205C' }}>
-                              {c.percentual}%
-                            </span>
+                        <td className="px-4 py-3">
+                          {f?.atingida ? (
+                            <div>
+                              <span className="px-2 py-0.5 rounded-full text-xs font-semibold" style={{ background: '#d1fae5', color: '#065f46' }}>
+                                {f.atingida.label}
+                              </span>
+                              <p className="text-xs mt-0.5" style={{ color: '#94a3b8' }}>{formatBRL(f.atingida.valor)}</p>
+                            </div>
                           ) : (
-                            <span style={{ color: '#94a3b8' }}>—</span>
+                            <span className="text-xs" style={{ color: '#94a3b8' }}>Nenhuma</span>
                           )}
                         </td>
                         <td className="px-4 py-3 text-right font-semibold" style={{ color: '#16a34a' }}>
-                          {c ? formatBRL(c.valor) : '—'}
+                          {f?.comissao != null ? formatBRL(f.comissao) : <span style={{ color: '#94a3b8' }}>—</span>}
                         </td>
-                        <td className="px-4 py-3 text-right" style={{ color: '#64748b' }}>
-                          {c?.meta ? formatBRL(c.meta) : '—'}
-                        </td>
-                        <td className="px-4 py-3">
-                          {c?.meta ? (
+                        <td className="px-4 py-3" style={{ minWidth: 120 }}>
+                          {f?.referencia ? (
                             <div className="flex items-center gap-2">
-                              <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: '#f1f5f9', minWidth: 60 }}>
+                              <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
                                 <div
                                   className="h-full rounded-full"
-                                  style={{
-                                    width: `${pct}%`,
-                                    background: pct >= 100 ? '#16a34a' : pct >= 70 ? '#FFD700' : '#00205C',
-                                  }}
+                                  style={{ width: `${pct}%`, background: pct >= 100 ? '#16a34a' : pct >= 70 ? '#FFD700' : '#00205C' }}
                                 />
                               </div>
-                              <span className="text-xs w-8 shrink-0" style={{ color: '#64748b' }}>
-                                {pct.toFixed(0)}%
-                              </span>
+                              <span className="text-xs shrink-0" style={{ color: '#64748b' }}>{pct.toFixed(0)}%</span>
                             </div>
                           ) : (
                             <span style={{ color: '#94a3b8' }}>—</span>
