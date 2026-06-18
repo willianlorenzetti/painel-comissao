@@ -5,7 +5,7 @@ import AppShell from '@/components/layout/AppShell';
 import { formatBRL, formatNumber, MESES, CORES_GRAFICO } from '@/lib/format';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer,
+  ResponsiveContainer, Legend,
 } from 'recharts';
 import { ChevronDown, Download, Filter } from 'lucide-react';
 import { useUser } from '@/components/providers/UserProvider';
@@ -40,7 +40,7 @@ export default function GestorPage() {
   const [filtroSetor, setFiltroSetor] = useState('');
   const [filtroEmpresa, setFiltroEmpresa] = useState('');
   const [ano, setAno] = useState(ANO_ATUAL);
-  const [mes, setMes] = useState<number | null>(null);
+  const [mes, setMes] = useState<number | null>(new Date().getMonth() + 1);
   const [loading, setLoading] = useState(true);
   const [busca, setBusca] = useState('');
 
@@ -267,17 +267,30 @@ export default function GestorPage() {
           {loading ? (
             <div className="h-48 flex items-center justify-center text-sm" style={{ color: '#94a3b8' }}>Carregando...</div>
           ) : (
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={top8Grafico}>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={top8Grafico} barCategoryGap="30%">
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                 <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} />
-                <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 10, fill: '#64748b' }} />
+                <YAxis
+                  yAxisId="vendas"
+                  tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
+                  tick={{ fontSize: 10, fill: '#64748b' }}
+                />
+                <YAxis
+                  yAxisId="comissao"
+                  orientation="right"
+                  tickFormatter={(v) => `${(v / 1000).toFixed(1)}k`}
+                  tick={{ fontSize: 10, fill: '#FFD700' }}
+                />
                 <Tooltip
                   formatter={(v, name) => [formatBRL(Number(v)), String(name)]}
                   contentStyle={{ background: '#0a1628', border: 'none', borderRadius: 8, color: '#fff' }}
+                  labelStyle={{ color: '#ffffff' }}
+                  itemStyle={{ color: '#ffffff' }}
                 />
-                <Bar dataKey="Vendas" fill="#00205C" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="Comissão" fill="#FFD700" radius={[4, 4, 0, 0]} />
+                <Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} />
+                <Bar yAxisId="vendas" dataKey="Vendas" fill="#00205C" radius={[4, 4, 0, 0]} />
+                <Bar yAxisId="comissao" dataKey="Comissão" fill="#FFD700" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           )}
@@ -308,7 +321,7 @@ export default function GestorPage() {
                     { label: 'Setor', align: 'left' },
                     { label: 'Total Vendas', align: 'center' },
                     { label: 'Meta Atingida', align: 'left' },
-                    { label: 'Comissão Est.', align: 'left' },
+                    { label: 'Comissão Est.', align: 'center' },
                     { label: 'Atingimento', align: 'left' },
                   ].map(({ label, align }) => (
                     <th key={label} className={`text-${align} px-4 py-3 font-semibold`} style={{ color: '#64748b' }}>
@@ -359,7 +372,7 @@ export default function GestorPage() {
                             <span className="text-xs" style={{ color: '#94a3b8' }}>Nenhuma</span>
                           )}
                         </td>
-                        <td className="px-4 py-3 text-right font-semibold" style={{ color: '#16a34a' }}>
+                        <td className="px-4 py-3 text-center font-semibold" style={{ color: '#16a34a' }}>
                           {f?.comissao != null ? formatBRL(f.comissao) : <span style={{ color: '#94a3b8' }}>—</span>}
                         </td>
                         <td className="px-4 py-3" style={{ minWidth: 120 }}>

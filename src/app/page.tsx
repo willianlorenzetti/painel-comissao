@@ -46,7 +46,7 @@ export default function DashboardPage() {
   const [data, setData] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [ano, setAno] = useState(ANO_ATUAL);
-  const [mes, setMes] = useState<number | null>(null);
+  const [mes, setMes] = useState<number | null>(new Date().getMonth() + 1);
 
   const fetchData = async () => {
     setLoading(true);
@@ -286,7 +286,7 @@ export default function DashboardPage() {
                 Carregando...
               </div>
             ) : (
-              <div className="space-y-2 overflow-auto max-h-48">
+              <div className="space-y-2 overflow-y-auto max-h-48 pr-2">
                 {data?.top_vendedores.map((v, i) => {
                   const pct = data.top_vendedores[0]
                     ? (v.total_vendas / data.top_vendedores[0].total_vendas) * 100

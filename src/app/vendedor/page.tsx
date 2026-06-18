@@ -40,7 +40,7 @@ export default function VendedorPage() {
   const [busca, setBusca] = useState('');
   const [aberto, setAberto] = useState(false);
   const [ano, setAno] = useState(ANO_ATUAL);
-  const [mes, setMes] = useState<number | null>(null);
+  const [mes, setMes] = useState<number | null>(new Date().getMonth() + 1);
   const [data, setData] = useState<VendedorData | null>(null);
   const [comissoes, setComissoes] = useState<ComissaoConfig[]>([]);
   const [loading, setLoading] = useState(false);

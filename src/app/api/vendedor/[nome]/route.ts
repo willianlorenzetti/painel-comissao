@@ -106,9 +106,13 @@ export async function GET(
       metaVendedor = await pool
         .request()
         .input('nomeVend', sql.VarChar, vendedor)
-        .input('anoMeta', sql.Int, parseInt(ano))
-        .input('mesMeta', sql.Int, parseInt(mes))
-        .query('SELECT meta1_valor, meta1_percentual, meta2_valor, meta2_percentual, meta3_valor, meta3_percentual FROM VendedorMetaMensal WHERE nome_vendedor=@nomeVend AND ano=@anoMeta AND mes=@mesMeta')
+        .input('anoMeta',  sql.Int,     parseInt(ano))
+        .input('mesMeta',  sql.VarChar, mes)
+        .query(`SELECT META1_VALOR as meta1_valor, META1_PERCENTUAL as meta1_percentual,
+                       META2_VALOR as meta2_valor, META2_PERCENTUAL as meta2_percentual,
+                       META3_VALOR as meta3_valor, META3_PERCENTUAL as meta3_percentual
+                FROM [TI-PAINELCOMISSAO_METAS]
+                WHERE VENDEDOR=@nomeVend AND ANO=@anoMeta AND MES=@mesMeta`)
         .catch(() => ({ recordset: [] as Array<Record<string,unknown>> }));
     }
     if (!metaVendedor.recordset.length) {

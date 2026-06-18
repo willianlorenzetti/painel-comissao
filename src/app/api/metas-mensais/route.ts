@@ -2,29 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getPool, sql } from '@/lib/db';
 import { getUsuario } from '@/lib/permissions';
 
-async function ensureTable() {
-  const pool = await getPool();
-  await pool.request().query(`
-    IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='VendedorMetaMensal' AND xtype='U')
-    BEGIN
-      CREATE TABLE VendedorMetaMensal (
-        id INT IDENTITY(1,1) PRIMARY KEY,
-        nome_vendedor VARCHAR(200) NOT NULL,
-        ano INT NOT NULL,
-        mes INT NOT NULL,
-        meta1_valor      DECIMAL(18,2) NOT NULL DEFAULT 0,
-        meta1_percentual DECIMAL(5,2)  NOT NULL DEFAULT 0,
-        meta2_valor      DECIMAL(18,2) NOT NULL DEFAULT 0,
-        meta2_percentual DECIMAL(5,2)  NOT NULL DEFAULT 0,
-        meta3_valor      DECIMAL(18,2) NOT NULL DEFAULT 0,
-        meta3_percentual DECIMAL(5,2)  NOT NULL DEFAULT 0,
-        criado_em DATETIME DEFAULT GETDATE(),
-        atualizado_em DATETIME DEFAULT GETDATE(),
-        CONSTRAINT UQ_VendedorMetaMensal UNIQUE (nome_vendedor, ano, mes)
-      )
-    END
-  `);
-}
+const TABELA = '[TI-PAINELCOMISSAO_METAS]';
 
 export async function GET(req: NextRequest) {
   const email = req.headers.get('x-user-email');
@@ -37,13 +15,18 @@ export async function GET(req: NextRequest) {
   const mes = searchParams.get('mes');
 
   try {
-    await ensureTable();
     const pool = await getPool();
     const r = pool.request();
     let where = 'WHERE 1=1';
-    if (ano) { r.input('ano', sql.Int, parseInt(ano)); where += ' AND ano = @ano'; }
-    if (mes) { r.input('mes', sql.Int, parseInt(mes)); where += ' AND mes = @mes'; }
-    const result = await r.query(`SELECT * FROM VendedorMetaMensal ${where} ORDER BY nome_vendedor`);
+    if (ano) { r.input('ano', sql.Int, parseInt(ano)); where += ' AND ANO = @ano'; }
+    if (mes) { r.input('mes', sql.VarChar, mes); where += ' AND MES = @mes'; }
+    const result = await r.query(
+      `SELECT VENDEDOR as nome_vendedor, ANO as ano, MES as mes,
+              META1_VALOR as meta1_valor, META1_PERCENTUAL as meta1_percentual,
+              META2_VALOR as meta2_valor, META2_PERCENTUAL as meta2_percentual,
+              META3_VALOR as meta3_valor, META3_PERCENTUAL as meta3_percentual
+       FROM ${TABELA} ${where} ORDER BY VENDEDOR`
+    );
     return NextResponse.json(result.recordset);
   } catch (error) {
     console.error('Erro ao buscar metas mensais:', error);
@@ -60,7 +43,6 @@ export async function PUT(req: NextRequest) {
   }
 
   try {
-    await ensureTable();
     const metas: {
       nome_vendedor: string; ano: number; mes: number;
       meta1_valor: number; meta1_percentual: number;
@@ -70,46 +52,46 @@ export async function PUT(req: NextRequest) {
 
     const pool = await getPool();
     for (const m of metas) {
+      const mesStr = String(m.mes);
       const existing = await pool.request()
         .input('nome', sql.VarChar, m.nome_vendedor)
-        .input('ano', sql.Int, m.ano)
-        .input('mes', sql.Int, m.mes)
-        .query('SELECT id FROM VendedorMetaMensal WHERE nome_vendedor=@nome AND ano=@ano AND mes=@mes');
+        .input('ano',  sql.Int,     m.ano)
+        .input('mes',  sql.VarChar, mesStr)
+        .query(`SELECT ID FROM ${TABELA} WHERE VENDEDOR=@nome AND ANO=@ano AND MES=@mes`);
 
       if (existing.recordset.length > 0) {
         await pool.request()
-          .input('nome', sql.VarChar, m.nome_vendedor)
-          .input('ano',  sql.Int, m.ano)
-          .input('mes',  sql.Int, m.mes)
-          .input('m1v',  sql.Decimal(18,2), m.meta1_valor)
-          .input('m1p',  sql.Decimal(5,2),  m.meta1_percentual)
-          .input('m2v',  sql.Decimal(18,2), m.meta2_valor)
-          .input('m2p',  sql.Decimal(5,2),  m.meta2_percentual)
-          .input('m3v',  sql.Decimal(18,2), m.meta3_valor)
-          .input('m3p',  sql.Decimal(5,2),  m.meta3_percentual)
+          .input('nome', sql.VarChar,  m.nome_vendedor)
+          .input('ano',  sql.Int,      m.ano)
+          .input('mes',  sql.VarChar,  mesStr)
+          .input('m1v',  sql.Float,    m.meta1_valor)
+          .input('m1p',  sql.Float,    m.meta1_percentual)
+          .input('m2v',  sql.Float,    m.meta2_valor)
+          .input('m2p',  sql.Float,    m.meta2_percentual)
+          .input('m3v',  sql.Float,    m.meta3_valor)
+          .input('m3p',  sql.Float,    m.meta3_percentual)
           .query(`
-            UPDATE VendedorMetaMensal
-            SET meta1_valor=@m1v, meta1_percentual=@m1p,
-                meta2_valor=@m2v, meta2_percentual=@m2p,
-                meta3_valor=@m3v, meta3_percentual=@m3p,
-                atualizado_em=GETDATE()
-            WHERE nome_vendedor=@nome AND ano=@ano AND mes=@mes
+            UPDATE ${TABELA}
+            SET META1_VALOR=@m1v, META1_PERCENTUAL=@m1p,
+                META2_VALOR=@m2v, META2_PERCENTUAL=@m2p,
+                META3_VALOR=@m3v, META3_PERCENTUAL=@m3p
+            WHERE VENDEDOR=@nome AND ANO=@ano AND MES=@mes
           `);
       } else {
         await pool.request()
-          .input('nome', sql.VarChar, m.nome_vendedor)
-          .input('ano',  sql.Int, m.ano)
-          .input('mes',  sql.Int, m.mes)
-          .input('m1v',  sql.Decimal(18,2), m.meta1_valor)
-          .input('m1p',  sql.Decimal(5,2),  m.meta1_percentual)
-          .input('m2v',  sql.Decimal(18,2), m.meta2_valor)
-          .input('m2p',  sql.Decimal(5,2),  m.meta2_percentual)
-          .input('m3v',  sql.Decimal(18,2), m.meta3_valor)
-          .input('m3p',  sql.Decimal(5,2),  m.meta3_percentual)
+          .input('nome', sql.VarChar,  m.nome_vendedor)
+          .input('ano',  sql.Int,      m.ano)
+          .input('mes',  sql.VarChar,  mesStr)
+          .input('m1v',  sql.Float,    m.meta1_valor)
+          .input('m1p',  sql.Float,    m.meta1_percentual)
+          .input('m2v',  sql.Float,    m.meta2_valor)
+          .input('m2p',  sql.Float,    m.meta2_percentual)
+          .input('m3v',  sql.Float,    m.meta3_valor)
+          .input('m3p',  sql.Float,    m.meta3_percentual)
           .query(`
-            INSERT INTO VendedorMetaMensal
-              (nome_vendedor,ano,mes,meta1_valor,meta1_percentual,meta2_valor,meta2_percentual,meta3_valor,meta3_percentual)
-            VALUES (@nome,@ano,@mes,@m1v,@m1p,@m2v,@m2p,@m3v,@m3p)
+            INSERT INTO ${TABELA}
+              (VENDEDOR, ANO, MES, META1_VALOR, META1_PERCENTUAL, META2_VALOR, META2_PERCENTUAL, META3_VALOR, META3_PERCENTUAL)
+            VALUES (@nome, @ano, @mes, @m1v, @m1p, @m2v, @m2p, @m3v, @m3p)
           `);
       }
     }
