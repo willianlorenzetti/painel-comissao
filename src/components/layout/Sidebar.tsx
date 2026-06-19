@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   ChevronLeft,
   ChevronRight,
+  Calculator,
 } from 'lucide-react';
 import Image from 'next/image';
 import { useState } from 'react';
@@ -20,6 +21,7 @@ const ALL_NAV = [
   { href: '/',            icon: LayoutDashboard, label: 'Dashboard',   cargos: ['ADM'] as Cargo[] },
   { href: '/vendedor',    icon: User,            label: 'Vendedor',    cargos: ['ADM', 'GESTOR', 'VENDEDOR'] as Cargo[] },
   { href: '/gestor',      icon: Users,           label: 'Gestor',      cargos: ['ADM', 'GESTOR'] as Cargo[] },
+  { href: '/simulacao',   icon: Calculator,      label: 'Simulação',   cargos: ['ADM', 'GESTOR', 'VENDEDOR'] as Cargo[] },
   { href: '/configuracao',icon: Settings,        label: 'Configuração',cargos: ['ADM'] as Cargo[] },
   { href: '/usuarios',    icon: ShieldCheck,     label: 'Usuários',    cargos: ['ADM'] as Cargo[] },
 ];

@@ -10,6 +10,7 @@ import {
 } from 'recharts';
 import { DollarSign, TrendingUp, ChevronDown, Search, User } from 'lucide-react';
 import { useUser } from '@/components/providers/UserProvider';
+import { calcularComissaoTelevendas, type MetaConfig, type BonusConfig } from '@/lib/commission';
 
 const ANO_ATUAL = new Date().getFullYear();
 const ANOS = [ANO_ATUAL, ANO_ATUAL - 1, ANO_ATUAL - 2];
@@ -22,6 +23,22 @@ interface VendedorData {
     meta1_valor: number; meta1_percentual: number;
     meta2_valor: number; meta2_percentual: number;
     meta3_valor: number; meta3_percentual: number;
+    percentual_sem_meta?: number;
+  } | null;
+  is_televendas?: boolean;
+  valor_pa?: number;
+  valor_chave?: number;
+  valor_ferragens_pa?: number;
+  valor_mercadoria?: number;
+  total_recebido?: number;
+  bonus_config?: BonusConfig | null;
+  comissao_televendas?: {
+    valor_pa: number; total_recebido: number;
+    meta_atingida: { label: string; valor: number; percentual: number } | null;
+    comissao_meta: number; percentual_sem_meta: number;
+    bonus_desbloqueado: boolean;
+    bonus_tier: { label: string; valor: number; percentual: number } | null;
+    comissao_bonus: number; comissao_total: number;
   } | null;
 }
 
@@ -118,8 +135,46 @@ export default function VendedorPage() {
     ? [{ valor: comissaoConfigSetor.meta_mensal, percentual: comissaoConfigSetor.percentual, label: 'Meta' }]
     : [];
 
-  const faixaAtingida = [...faixas].reverse().find((f) => f.valor > 0 && totalVendas >= f.valor) || null;
-  const comissaoValor = faixaAtingida ? (totalVendas * faixaAtingida.percentual) / 100 : null;
+  const isTelevendas = data?.is_televendas ?? false;
+  const ctv = data?.comissao_televendas;
+  const bonusConfigData: BonusConfig | null = data?.bonus_config ?? null;
+  const valorPAAtual = data?.valor_pa ?? 0;
+  const recebidoAtual = data?.total_recebido ?? 0;
+
+  const temMetaDefinida = faixas.some((f) => f.valor > 0);
+  const compareRealizado = isTelevendas ? valorPAAtual : totalVendas;
+  const faixaAtingida = [...faixas].reverse().find((f) => f.valor > 0 && compareRealizado >= f.valor) || null;
+  const comissaoValor = isTelevendas
+    ? (ctv?.comissao_total ?? null)
+    : faixaAtingida ? (totalVendas * faixaAtingida.percentual) / 100 : null;
+
+  // Projeção do mês
+  const hoje = new Date();
+  const mesSel = mes || hoje.getMonth() + 1;
+  const anoSel = ano;
+  const daysInMonth = new Date(anoSel, mesSel, 0).getDate();
+  const isMesAtual = mesSel === hoje.getMonth() + 1 && anoSel === hoje.getFullYear();
+  const diasDecorridos = isMesAtual ? hoje.getDate() : daysInMonth;
+  const temProjecao = mes !== null && (isTelevendas ? valorPAAtual > 0 : totalVendas > 0) && diasDecorridos > 0;
+  const projecaoVendas = temProjecao && !isTelevendas ? (totalVendas / diasDecorridos) * daysInMonth : 0;
+  const projecaoPA = temProjecao && isTelevendas ? (valorPAAtual / diasDecorridos) * daysInMonth : 0;
+  const projecaoRecebidos = temProjecao && isTelevendas ? (recebidoAtual / diasDecorridos) * daysInMonth : 0;
+  const metaConfigObj: MetaConfig | null = metaIndividual ? {
+    meta1_valor: metaIndividual.meta1_valor, meta1_percentual: metaIndividual.meta1_percentual,
+    meta2_valor: metaIndividual.meta2_valor, meta2_percentual: metaIndividual.meta2_percentual,
+    meta3_valor: metaIndividual.meta3_valor, meta3_percentual: metaIndividual.meta3_percentual,
+    percentual_sem_meta: metaIndividual.percentual_sem_meta ?? 0,
+  } : null;
+  const ctvProjecao = isTelevendas && projecaoPA > 0
+    ? calcularComissaoTelevendas(projecaoPA, projecaoRecebidos, metaConfigObj, bonusConfigData)
+    : null;
+  const projecaoExibida = isTelevendas ? projecaoPA : projecaoVendas;
+  const faixaProjetada = temProjecao
+    ? [...faixas].reverse().find((f) => f.valor > 0 && projecaoExibida >= f.valor) || null
+    : null;
+  const projecaoComissao = isTelevendas
+    ? (ctvProjecao?.comissao_total ?? null)
+    : faixaProjetada ? (projecaoVendas * faixaProjetada.percentual) / 100 : null;
 
   const mensalGrafico = MESES.map((nome, i) => {
     const found = data?.mensal.find((m) => m.mes === i + 1);
@@ -246,16 +301,16 @@ export default function VendedorPage() {
         {/* KPI + Metas */}
         <div className="grid grid-cols-4 gap-4">
           <KPICard
-            title="Total Vendido"
-            value={loading ? '...' : formatBRL(totalVendas)}
+            title={isTelevendas ? 'Total PA' : 'Total Vendido'}
+            value={loading ? '...' : formatBRL(isTelevendas ? (data?.valor_pa ?? 0) : totalVendas)}
             subtitle={mes ? MESES[mes - 1] : `Ano ${ano}`}
             icon={<DollarSign size={18} />}
             accent
           />
           <KPICard
             title="Comissão Estimada"
-            value={loading ? '...' : comissaoValor !== null ? formatBRL(comissaoValor) : 'Não configurada'}
-            subtitle={faixaAtingida ? `${faixaAtingida.percentual}% — ${faixaAtingida.label}` : faixas.length ? 'Nenhuma meta atingida' : 'Configure em Configuração'}
+            value={loading ? '...' : comissaoValor !== null ? formatBRL(comissaoValor) : temMetaDefinida ? '—' : 'Meta não definida'}
+            subtitle={faixaAtingida ? `${faixaAtingida.percentual}% — ${faixaAtingida.label}` : temMetaDefinida ? 'Meta não batida' : 'Cadastre em Configuração'}
             icon={<TrendingUp size={18} />}
           />
           <div
@@ -297,6 +352,292 @@ export default function VendedorPage() {
             )}
           </div>
         </div>
+
+        {/* Comissão Televendas — bloco detalhado para TELEVENDAS / TELEVENDAS MG */}
+        {isTelevendas && mes && ctv && (
+          <div className="grid grid-cols-2 gap-4">
+
+            {/* PA Breakdown */}
+            <div className="rounded-xl p-5 shadow-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+              <h2 className="text-sm font-bold mb-4" style={{ color: '#00205C' }}>Vendas PA — {MESES[mesSel - 1]}</h2>
+              <div className="space-y-3">
+                {[
+                  { label: 'Chave', valor: data?.valor_chave ?? 0, color: '#1e40af', bg: '#eff6ff' },
+                  { label: 'Ferragens PA', valor: data?.valor_ferragens_pa ?? 0, color: '#065f46', bg: '#f0fdf4' },
+                  { label: 'Total PA', valor: ctv.valor_pa, color: '#00205C', bg: '#f8fafc', bold: true },
+                  { label: 'Recebimentos', valor: ctv.total_recebido, color: '#92400e', bg: '#fffbeb' },
+                ].map((row, i) => (
+                  <div key={i} className="flex justify-between items-center py-1.5 px-3 rounded-lg text-sm"
+                    style={{ background: row.bg }}>
+                    <span style={{ color: '#64748b', fontWeight: row.bold ? 700 : 400 }}>{row.label}</span>
+                    <span style={{ color: row.color, fontWeight: row.bold ? 700 : 600 }}>{formatBRL(row.valor)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Comissão Detalhada */}
+            <div className="rounded-xl p-5 shadow-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+              <h2 className="text-sm font-bold mb-4" style={{ color: '#00205C' }}>Comissão Televendas — {MESES[mesSel - 1]}</h2>
+
+              {/* Meta PA */}
+              <div className="rounded-lg p-3 mb-3" style={{
+                background: ctv.meta_atingida ? '#f0fdf4' : '#fff1f2',
+                border: `1px solid ${ctv.meta_atingida ? '#bbf7d0' : '#fecdd3'}`
+              }}>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs font-semibold" style={{ color: ctv.meta_atingida ? '#065f46' : '#991b1b' }}>
+                    {ctv.meta_atingida ? `${ctv.meta_atingida.label} atingida ✓` : 'Nenhuma meta PA atingida'}
+                  </span>
+                  {ctv.meta_atingida && (
+                    <span className="text-xs font-bold" style={{ color: '#065f46' }}>
+                      {ctv.meta_atingida.percentual}% × recebimentos
+                    </span>
+                  )}
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span style={{ color: '#64748b' }}>Comissão meta</span>
+                  <span className="font-bold" style={{ color: ctv.meta_atingida ? '#16a34a' : '#dc2626' }}>
+                    {formatBRL(ctv.comissao_meta)}
+                  </span>
+                </div>
+                {!ctv.meta_atingida && ctv.percentual_sem_meta > 0 && (
+                  <p className="text-xs mt-1" style={{ color: '#94a3b8' }}>
+                    Aplicado {ctv.percentual_sem_meta}% (% sem meta) sobre recebimentos
+                  </p>
+                )}
+              </div>
+
+              {/* Bônus */}
+              <div className="rounded-lg p-3 mb-3" style={{
+                background: ctv.bonus_desbloqueado ? '#f0fdf4' : '#f8fafc',
+                border: `1px solid ${ctv.bonus_desbloqueado ? '#bbf7d0' : '#e2e8f0'}`
+              }}>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs font-semibold" style={{ color: ctv.bonus_desbloqueado ? '#065f46' : '#94a3b8' }}>
+                    {ctv.bonus_desbloqueado
+                      ? ctv.bonus_tier ? `${ctv.bonus_tier.label} atingida ✓` : 'Bônus desbloqueado'
+                      : 'Bônus não desbloqueado'}
+                  </span>
+                  {ctv.bonus_tier && (
+                    <span className="text-xs font-bold" style={{ color: '#065f46' }}>
+                      {ctv.bonus_tier.percentual}% × valor PA
+                    </span>
+                  )}
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span style={{ color: '#64748b' }}>Comissão bônus</span>
+                  <span className="font-bold" style={{ color: ctv.comissao_bonus > 0 ? '#16a34a' : '#94a3b8' }}>
+                    {formatBRL(ctv.comissao_bonus)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Total */}
+              <div className="rounded-lg p-4 text-center"
+                style={{ background: '#00205C', border: '1px solid #1a3a6e' }}>
+                <p className="text-xs uppercase tracking-wide mb-1" style={{ color: '#94a3b8' }}>Total Comissão</p>
+                <p className="text-2xl font-bold" style={{ color: '#FFD700' }}>
+                  {formatBRL(ctv.comissao_total)}
+                </p>
+                <p className="text-xs mt-1" style={{ color: '#64748b' }}>
+                  Meta + Bônus
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Projeções do Mês */}
+        {temProjecao && (
+          <div className="grid grid-cols-2 gap-4">
+
+            {/* Projeção de Vendas / PA */}
+            <div className="rounded-xl p-5 shadow-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-sm font-semibold" style={{ color: '#00205C' }}>
+                  {isTelevendas ? 'Projeção de PA' : 'Projeção de Vendas'} — {MESES[mesSel - 1]}
+                </h2>
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#eff6ff', color: '#1e40af' }}>
+                  Dia {diasDecorridos}/{daysInMonth}
+                </span>
+              </div>
+
+              <p className="text-2xl font-bold mb-1" style={{ color: '#00205C' }}>
+                {formatBRL(projecaoExibida)}
+              </p>
+              <p className="text-xs mb-4" style={{ color: '#64748b' }}>
+                Ritmo: {formatBRL((isTelevendas ? valorPAAtual : totalVendas) / diasDecorridos)}/dia &bull; Realizado: {formatBRL(isTelevendas ? valorPAAtual : totalVendas)}
+              </p>
+
+              {(() => {
+                const realizadoExib = isTelevendas ? valorPAAtual : totalVendas;
+                const metaRef = faixas.filter(f => f.valor > 0).sort((a,b) => b.valor - a.valor)[0]?.valor || projecaoExibida;
+                const base = Math.max(projecaoExibida, metaRef) * 1.05;
+                const pctReal = Math.min((realizadoExib / base) * 100, 100);
+                const pctProj = Math.min((projecaoExibida / base) * 100, 100);
+                return (
+                  <div className="space-y-3">
+                    <div>
+                      <div className="flex justify-between text-xs mb-1" style={{ color: '#64748b' }}>
+                        <span>Realizado</span><span>{formatBRL(realizadoExib)}</span>
+                      </div>
+                      <div className="h-3 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
+                        <div className="h-full rounded-full" style={{ width: `${pctReal}%`, background: '#00205C' }} />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-xs mb-1" style={{ color: '#64748b' }}>
+                        <span>Projeção</span><span>{formatBRL(projecaoExibida)}</span>
+                      </div>
+                      <div className="h-3 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
+                        <div className="h-full rounded-full" style={{ width: `${pctProj}%`, background: '#FFD700' }} />
+                      </div>
+                    </div>
+                    {faixas.filter(f => f.valor > 0).map((f, i) => {
+                      const pctMeta = Math.min((f.valor / base) * 100, 100);
+                      const atingeProj = projecaoExibida >= f.valor;
+                      return (
+                        <div key={i}>
+                          <div className="flex justify-between text-xs mb-1" style={{ color: '#64748b' }}>
+                            <span>{f.label}</span>
+                            <span style={{ color: atingeProj ? '#16a34a' : '#94a3b8' }}>
+                              {formatBRL(f.valor)} {atingeProj ? '✓' : ''}
+                            </span>
+                          </div>
+                          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
+                            <div className="h-full rounded-full" style={{ width: `${pctMeta}%`, background: atingeProj ? '#16a34a' : '#e2e8f0' }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Projeção de Comissão */}
+            <div className="rounded-xl p-5 shadow-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-sm font-semibold" style={{ color: '#00205C' }}>
+                  Projeção de Comissão — {MESES[mesSel - 1]}
+                </h2>
+                {(isTelevendas ? ctvProjecao?.meta_atingida : faixaProjetada) && (
+                  <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: '#d1fae5', color: '#065f46' }}>
+                    {isTelevendas ? ctvProjecao?.meta_atingida?.label : faixaProjetada?.label} projetada
+                  </span>
+                )}
+              </div>
+
+              <p className="text-2xl font-bold mb-1" style={{ color: projecaoComissao ? '#16a34a' : '#94a3b8' }}>
+                {projecaoComissao ? formatBRL(projecaoComissao) : 'Nenhuma meta projetada'}
+              </p>
+              <p className="text-xs mb-4" style={{ color: '#64748b' }}>
+                {isTelevendas
+                  ? ctvProjecao?.meta_atingida
+                    ? `${ctvProjecao.meta_atingida.percentual}% × recebimentos proj. (${formatBRL(projecaoRecebidos)})`
+                    : 'Ritmo atual não atinge nenhuma meta PA'
+                  : faixaProjetada
+                    ? `${faixaProjetada.percentual}% sobre ${formatBRL(projecaoVendas)}`
+                    : 'Ritmo atual não atinge nenhuma meta'}
+              </p>
+
+              {isTelevendas ? (
+                ctvProjecao && (
+                  <div className="space-y-3">
+                    <div>
+                      <div className="flex justify-between text-xs mb-1" style={{ color: '#64748b' }}>
+                        <span>Comissão atual</span>
+                        <span>{ctv ? formatBRL(ctv.comissao_total) : '—'}</span>
+                      </div>
+                      <div className="h-3 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
+                        {(() => {
+                          const max = Math.max(ctvProjecao.comissao_total, ctv?.comissao_total || 0) * 1.05 || 1;
+                          return <div className="h-full rounded-full" style={{ width: `${Math.min(((ctv?.comissao_total || 0) / max) * 100, 100)}%`, background: '#00205C' }} />;
+                        })()}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-xs mb-1" style={{ color: '#64748b' }}>
+                        <span>Comissão projetada</span>
+                        <span style={{ color: '#16a34a', fontWeight: 600 }}>{formatBRL(ctvProjecao.comissao_total)}</span>
+                      </div>
+                      <div className="h-3 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
+                        <div className="h-full rounded-full" style={{ width: '100%', background: '#FFD700' }} />
+                      </div>
+                    </div>
+                    <div className="pt-2 grid grid-cols-2 gap-2">
+                      <div className="rounded-lg p-2 text-center" style={{ background: ctvProjecao.meta_atingida ? '#f0fdf4' : '#fff1f2', border: `1px solid ${ctvProjecao.meta_atingida ? '#bbf7d0' : '#fecdd3'}` }}>
+                        <p className="text-xs font-semibold mb-0.5" style={{ color: ctvProjecao.meta_atingida ? '#065f46' : '#991b1b' }}>Meta projetada</p>
+                        <p className="text-xs font-bold" style={{ color: ctvProjecao.meta_atingida ? '#065f46' : '#991b1b' }}>
+                          {ctvProjecao.meta_atingida?.label ?? 'Nenhuma'}
+                        </p>
+                        <p className="text-sm font-bold mt-1" style={{ color: ctvProjecao.meta_atingida ? '#16a34a' : '#dc2626' }}>{formatBRL(ctvProjecao.comissao_meta)}</p>
+                      </div>
+                      <div className="rounded-lg p-2 text-center" style={{ background: ctvProjecao.bonus_desbloqueado ? '#f0fdf4' : '#f8fafc', border: `1px solid ${ctvProjecao.bonus_desbloqueado ? '#bbf7d0' : '#e2e8f0'}` }}>
+                        <p className="text-xs font-semibold mb-0.5" style={{ color: ctvProjecao.bonus_desbloqueado ? '#065f46' : '#94a3b8' }}>Bônus projetado</p>
+                        <p className="text-xs font-bold" style={{ color: ctvProjecao.bonus_desbloqueado ? '#065f46' : '#94a3b8' }}>
+                          {ctvProjecao.bonus_tier?.label ?? (ctvProjecao.bonus_desbloqueado ? 'Sem tier' : 'Não desbloqueado')}
+                        </p>
+                        <p className="text-sm font-bold mt-1" style={{ color: ctvProjecao.bonus_desbloqueado ? '#16a34a' : '#94a3b8' }}>{formatBRL(ctvProjecao.comissao_bonus)}</p>
+                      </div>
+                    </div>
+                  </div>
+                )
+              ) : (
+                faixas.filter(f => f.valor > 0).length > 0 && (() => {
+                  const comissoes_proj = faixas.filter(f => f.valor > 0).map(f => ({
+                    ...f,
+                    comissaoProjeto: projecaoVendas >= f.valor ? (projecaoVendas * f.percentual) / 100 : 0,
+                    comissaoReal:    totalVendas  >= f.valor ? (totalVendas  * f.percentual) / 100 : 0,
+                  }));
+                  const maxComissao = Math.max(...comissoes_proj.map(c => c.comissaoProjeto), comissaoValor || 0) * 1.05 || 1;
+                  return (
+                    <div className="space-y-3">
+                      <div>
+                        <div className="flex justify-between text-xs mb-1" style={{ color: '#64748b' }}>
+                          <span>Comissão atual</span>
+                          <span>{comissaoValor ? formatBRL(comissaoValor) : '—'}</span>
+                        </div>
+                        <div className="h-3 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
+                          <div className="h-full rounded-full" style={{ width: `${Math.min(((comissaoValor || 0) / maxComissao) * 100, 100)}%`, background: '#00205C' }} />
+                        </div>
+                      </div>
+                      <div>
+                        <div className="flex justify-between text-xs mb-1" style={{ color: '#64748b' }}>
+                          <span>Comissão projetada</span>
+                          <span style={{ color: '#16a34a', fontWeight: 600 }}>{projecaoComissao ? formatBRL(projecaoComissao) : '—'}</span>
+                        </div>
+                        <div className="h-3 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
+                          <div className="h-full rounded-full" style={{ width: `${Math.min(((projecaoComissao || 0) / maxComissao) * 100, 100)}%`, background: '#FFD700' }} />
+                        </div>
+                      </div>
+                      <div className="pt-2 grid grid-cols-3 gap-2">
+                        {faixas.filter(f => f.valor > 0).map((f, i) => {
+                          const atingeProj = projecaoVendas >= f.valor;
+                          const atingeReal = totalVendas >= f.valor;
+                          const cor = CORES_FAIXA[i] || CORES_FAIXA[0];
+                          return (
+                            <div key={i} className="rounded-lg p-2 text-center" style={{ background: cor.bg, border: `1px solid ${cor.bar}` }}>
+                              <p className="text-xs font-semibold mb-0.5" style={{ color: cor.text }}>{f.label}</p>
+                              <p className="text-xs font-bold" style={{ color: cor.text }}>
+                                {atingeProj ? formatBRL(projecaoVendas * f.percentual / 100) : '—'}
+                              </p>
+                              <p className="text-xs mt-0.5" style={{ color: atingeReal ? '#16a34a' : atingeProj ? '#f59e0b' : '#94a3b8' }}>
+                                {atingeReal ? 'Atingida ✓' : atingeProj ? 'Projetada' : 'Não atingida'}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
+            </div>
+
+          </div>
+        )}
 
         {/* Gráficos */}
         <div className="grid grid-cols-2 gap-4">

@@ -4,6 +4,18 @@ import { getUsuario } from '@/lib/permissions';
 
 const TABELA = '[TI-PAINELCOMISSAO_METAS]';
 
+async function temColunaPSM(pool: Awaited<ReturnType<typeof getPool>>): Promise<boolean> {
+  try {
+    const r = await pool.request().query(`
+      SELECT COUNT(*) as cnt FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_NAME = 'TI-PAINELCOMISSAO_METAS' AND COLUMN_NAME = 'PERCENTUAL_SEM_META'
+    `);
+    return Number(r.recordset[0]?.cnt) > 0;
+  } catch {
+    return false;
+  }
+}
+
 export async function GET(req: NextRequest) {
   const email = req.headers.get('x-user-email');
   if (!email) return NextResponse.json({ error: 'Não autenticado' }, { status: 401 });
@@ -16,15 +28,19 @@ export async function GET(req: NextRequest) {
 
   try {
     const pool = await getPool();
+    const hasPSM = await temColunaPSM(pool);
     const r = pool.request();
     let where = 'WHERE 1=1';
     if (ano) { r.input('ano', sql.Int, parseInt(ano)); where += ' AND ANO = @ano'; }
-    if (mes) { r.input('mes', sql.VarChar, mes); where += ' AND MES = @mes'; }
+    if (mes) { r.input('mes', sql.VarChar, mes);       where += ' AND MES = @mes'; }
+
+    const psmCol = hasPSM ? 'ISNULL(PERCENTUAL_SEM_META, 0) as percentual_sem_meta' : '0 as percentual_sem_meta';
     const result = await r.query(
       `SELECT VENDEDOR as nome_vendedor, ANO as ano, MES as mes,
               META1_VALOR as meta1_valor, META1_PERCENTUAL as meta1_percentual,
               META2_VALOR as meta2_valor, META2_PERCENTUAL as meta2_percentual,
-              META3_VALOR as meta3_valor, META3_PERCENTUAL as meta3_percentual
+              META3_VALOR as meta3_valor, META3_PERCENTUAL as meta3_percentual,
+              ${psmCol}
        FROM ${TABELA} ${where} ORDER BY VENDEDOR`
     );
     return NextResponse.json(result.recordset);
@@ -48,9 +64,12 @@ export async function PUT(req: NextRequest) {
       meta1_valor: number; meta1_percentual: number;
       meta2_valor: number; meta2_percentual: number;
       meta3_valor: number; meta3_percentual: number;
+      percentual_sem_meta: number;
     }[] = await req.json();
 
     const pool = await getPool();
+    const hasPSM = await temColunaPSM(pool);
+
     for (const m of metas) {
       const mesStr = String(m.mes);
       const existing = await pool.request()
@@ -59,40 +78,44 @@ export async function PUT(req: NextRequest) {
         .input('mes',  sql.VarChar, mesStr)
         .query(`SELECT ID FROM ${TABELA} WHERE VENDEDOR=@nome AND ANO=@ano AND MES=@mes`);
 
+      const r = pool.request()
+        .input('nome', sql.VarChar, m.nome_vendedor)
+        .input('ano',  sql.Int,     m.ano)
+        .input('mes',  sql.VarChar, mesStr)
+        .input('m1v',  sql.Float,   m.meta1_valor)
+        .input('m1p',  sql.Float,   m.meta1_percentual)
+        .input('m2v',  sql.Float,   m.meta2_valor)
+        .input('m2p',  sql.Float,   m.meta2_percentual)
+        .input('m3v',  sql.Float,   m.meta3_valor)
+        .input('m3p',  sql.Float,   m.meta3_percentual);
+
+      if (hasPSM) r.input('psm', sql.Float, m.percentual_sem_meta ?? 0);
+
       if (existing.recordset.length > 0) {
-        await pool.request()
-          .input('nome', sql.VarChar,  m.nome_vendedor)
-          .input('ano',  sql.Int,      m.ano)
-          .input('mes',  sql.VarChar,  mesStr)
-          .input('m1v',  sql.Float,    m.meta1_valor)
-          .input('m1p',  sql.Float,    m.meta1_percentual)
-          .input('m2v',  sql.Float,    m.meta2_valor)
-          .input('m2p',  sql.Float,    m.meta2_percentual)
-          .input('m3v',  sql.Float,    m.meta3_valor)
-          .input('m3p',  sql.Float,    m.meta3_percentual)
-          .query(`
-            UPDATE ${TABELA}
-            SET META1_VALOR=@m1v, META1_PERCENTUAL=@m1p,
-                META2_VALOR=@m2v, META2_PERCENTUAL=@m2p,
-                META3_VALOR=@m3v, META3_PERCENTUAL=@m3p
-            WHERE VENDEDOR=@nome AND ANO=@ano AND MES=@mes
-          `);
+        await r.query(hasPSM
+          ? `UPDATE ${TABELA}
+             SET META1_VALOR=@m1v, META1_PERCENTUAL=@m1p,
+                 META2_VALOR=@m2v, META2_PERCENTUAL=@m2p,
+                 META3_VALOR=@m3v, META3_PERCENTUAL=@m3p,
+                 PERCENTUAL_SEM_META=@psm
+             WHERE VENDEDOR=@nome AND ANO=@ano AND MES=@mes`
+          : `UPDATE ${TABELA}
+             SET META1_VALOR=@m1v, META1_PERCENTUAL=@m1p,
+                 META2_VALOR=@m2v, META2_PERCENTUAL=@m2p,
+                 META3_VALOR=@m3v, META3_PERCENTUAL=@m3p
+             WHERE VENDEDOR=@nome AND ANO=@ano AND MES=@mes`
+        );
       } else {
-        await pool.request()
-          .input('nome', sql.VarChar,  m.nome_vendedor)
-          .input('ano',  sql.Int,      m.ano)
-          .input('mes',  sql.VarChar,  mesStr)
-          .input('m1v',  sql.Float,    m.meta1_valor)
-          .input('m1p',  sql.Float,    m.meta1_percentual)
-          .input('m2v',  sql.Float,    m.meta2_valor)
-          .input('m2p',  sql.Float,    m.meta2_percentual)
-          .input('m3v',  sql.Float,    m.meta3_valor)
-          .input('m3p',  sql.Float,    m.meta3_percentual)
-          .query(`
-            INSERT INTO ${TABELA}
-              (VENDEDOR, ANO, MES, META1_VALOR, META1_PERCENTUAL, META2_VALOR, META2_PERCENTUAL, META3_VALOR, META3_PERCENTUAL)
-            VALUES (@nome, @ano, @mes, @m1v, @m1p, @m2v, @m2p, @m3v, @m3p)
-          `);
+        await r.query(hasPSM
+          ? `INSERT INTO ${TABELA}
+               (VENDEDOR, ANO, MES, META1_VALOR, META1_PERCENTUAL, META2_VALOR, META2_PERCENTUAL,
+                META3_VALOR, META3_PERCENTUAL, PERCENTUAL_SEM_META)
+             VALUES (@nome, @ano, @mes, @m1v, @m1p, @m2v, @m2p, @m3v, @m3p, @psm)`
+          : `INSERT INTO ${TABELA}
+               (VENDEDOR, ANO, MES, META1_VALOR, META1_PERCENTUAL, META2_VALOR, META2_PERCENTUAL,
+                META3_VALOR, META3_PERCENTUAL)
+             VALUES (@nome, @ano, @mes, @m1v, @m1p, @m2v, @m2p, @m3v, @m3p)`
+        );
       }
     }
     return NextResponse.json({ success: true });
