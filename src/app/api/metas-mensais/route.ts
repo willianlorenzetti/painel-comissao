@@ -4,14 +4,20 @@ import { getUsuario } from '@/lib/permissions';
 
 const TABELA = '[TI-PAINELCOMISSAO_METAS]';
 
-async function temColunaPSM(pool: Awaited<ReturnType<typeof getPool>>): Promise<boolean> {
+async function garantirColunaPSM(pool: Awaited<ReturnType<typeof getPool>>): Promise<boolean> {
   try {
-    const r = await pool.request().query(`
-      SELECT COUNT(*) as cnt FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_NAME = 'TI-PAINELCOMISSAO_METAS' AND COLUMN_NAME = 'PERCENTUAL_SEM_META'
+    await pool.request().query(`
+      IF NOT EXISTS (
+        SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = 'TI-PAINELCOMISSAO_METAS' AND COLUMN_NAME = 'PERCENTUAL_SEM_META'
+      )
+      BEGIN
+        ALTER TABLE ${TABELA} ADD PERCENTUAL_SEM_META FLOAT DEFAULT 0;
+      END
     `);
-    return Number(r.recordset[0]?.cnt) > 0;
-  } catch {
+    return true;
+  } catch (err) {
+    console.error('[metas-mensais] garantirColunaPSM falhou — coluna PERCENTUAL_SEM_META não pôde ser criada:', err);
     return false;
   }
 }
@@ -28,7 +34,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const pool = await getPool();
-    const hasPSM = await temColunaPSM(pool);
+    const hasPSM = await garantirColunaPSM(pool);
     const r = pool.request();
     let where = 'WHERE 1=1';
     if (ano) { r.input('ano', sql.Int, parseInt(ano)); where += ' AND ANO = @ano'; }
@@ -68,7 +74,7 @@ export async function PUT(req: NextRequest) {
     }[] = await req.json();
 
     const pool = await getPool();
-    const hasPSM = await temColunaPSM(pool);
+    const hasPSM = await garantirColunaPSM(pool);
 
     for (const m of metas) {
       const mesStr = String(m.mes);

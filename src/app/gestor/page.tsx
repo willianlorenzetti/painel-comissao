@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import AppShell from '@/components/layout/AppShell';
 import { formatBRL, formatNumber, MESES, CORES_GRAFICO } from '@/lib/format';
+import { calcularComissaoTelevendas, type MetaConfig, type BonusConfig } from '@/lib/commission';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, LabelList,
@@ -21,6 +22,9 @@ interface ResumoVendedor {
   total_vendas: number;
   total_qtde: number;
   total_registros: number;
+  valor_pa: number;
+  total_recebido: number;
+  is_televendas: boolean;
 }
 
 interface MetaVendedor {
@@ -28,6 +32,7 @@ interface MetaVendedor {
   meta1_valor: number; meta1_percentual: number;
   meta2_valor: number; meta2_percentual: number;
   meta3_valor: number; meta3_percentual: number;
+  percentual_sem_meta: number;
 }
 
 export default function GestorPage() {
@@ -43,6 +48,7 @@ export default function GestorPage() {
   const [mes, setMes] = useState<number | null>(new Date().getMonth() + 1);
   const [loading, setLoading] = useState(true);
   const [busca, setBusca] = useState('');
+  const [bonusConfig, setBonusConfig] = useState<BonusConfig | null>(null);
 
   useEffect(() => {
     if (usuario && usuario !== 'loading' && usuario.cargo === 'VENDEDOR') {
@@ -57,6 +63,10 @@ export default function GestorPage() {
         setSetores(d.setores || []);
         setEmpresas(d.empresas || []);
       });
+    fetch('/api/bonus-config')
+      .then((r) => r.json())
+      .then(setBonusConfig)
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -87,6 +97,7 @@ export default function GestorPage() {
       .finally(() => setLoading(false));
   }, [ano, mes, filtroSetor, filtroEmpresa]);
 
+  // Lógica para vendedores normais (não-Televendas): compara total_vendas vs metas
   const getFaixa = (vendedor: string, totalVendas: number) => {
     const m = metasMap[vendedor];
     if (!m) return null;
@@ -96,7 +107,6 @@ export default function GestorPage() {
       { label: 'Meta 1', valor: Number(m.meta1_valor), percentual: Number(m.meta1_percentual) },
     ];
     const atingida = tiers.find((t) => t.valor > 0 && totalVendas >= t.valor) || null;
-    // Próxima meta não atingida (para barra de progresso)
     const proxima = [...tiers].reverse().find((t) => t.valor > 0 && totalVendas < t.valor) || null;
     const referencia = proxima?.valor || atingida?.valor || 0;
     return {
@@ -106,14 +116,31 @@ export default function GestorPage() {
     };
   };
 
+  // Lógica Televendas: compara valor_pa vs metas, comissão sobre recebimentos
+  const getComissaoTV = (v: ResumoVendedor) => {
+    const m = metasMap[v.vendedor];
+    if (!m) return null;
+    const metaConfig: MetaConfig = {
+      meta1_valor: Number(m.meta1_valor), meta1_percentual: Number(m.meta1_percentual),
+      meta2_valor: Number(m.meta2_valor), meta2_percentual: Number(m.meta2_percentual),
+      meta3_valor: Number(m.meta3_valor), meta3_percentual: Number(m.meta3_percentual),
+      percentual_sem_meta: Number(m.percentual_sem_meta ?? 0),
+    };
+    return calcularComissaoTelevendas(v.valor_pa, v.total_recebido, metaConfig, bonusConfig);
+  };
+
   const vendedoresFiltrados = vendedores.filter((v) =>
     !busca || v.vendedor.toLowerCase().includes(busca.toLowerCase())
   );
 
   const totalVendas = vendedoresFiltrados.reduce((s, v) => s + v.total_vendas, 0);
+  const totalPA = vendedoresFiltrados.reduce((s, v) => s + (v.valor_pa ?? 0), 0);
+  const todasTelevendas = vendedoresFiltrados.length > 0 && vendedoresFiltrados.every((v) => v.is_televendas);
+  const algumaTelevendas = vendedoresFiltrados.some((v) => v.is_televendas);
+  const totalEquipeExibido = todasTelevendas ? totalPA : totalVendas;
   const totalComissoes = vendedoresFiltrados.reduce((s, v) => {
-    const f = getFaixa(v.vendedor, v.total_vendas);
-    return s + (f?.comissao || 0);
+    if (v.is_televendas) return s + (getComissaoTV(v)?.comissao_total ?? 0);
+    return s + (getFaixa(v.vendedor, v.total_vendas)?.comissao ?? 0);
   }, 0);
 
   // Remove o prefixo do setor (primeira palavra) e trunca o restante
@@ -129,14 +156,24 @@ export default function GestorPage() {
   }));
 
   const exportCSV = () => {
-    const header = ['Vendedor', 'Setor', 'Total Vendas', 'Meta Atingida', 'Comissão (R$)'].join(';');
+    const header = ['Vendedor', 'Setor', 'Total Vendas', 'Valor PA', 'Recebimentos', 'Meta Atingida', 'Comissão (R$)'].join(';');
     const rows = vendedoresFiltrados.map((v) => {
-      const f = getFaixa(v.vendedor, v.total_vendas);
+      let metaLabel = '-', comissao = '-';
+      if (v.is_televendas) {
+        const ctv = getComissaoTV(v);
+        metaLabel = ctv?.meta_atingida?.label || '-';
+        comissao = ctv ? ctv.comissao_total.toFixed(2) : '-';
+      } else {
+        const f = getFaixa(v.vendedor, v.total_vendas);
+        metaLabel = f?.atingida?.label || '-';
+        comissao = f?.comissao != null ? f.comissao.toFixed(2) : '-';
+      }
       return [
         v.vendedor, v.setor,
         v.total_vendas.toFixed(2),
-        f?.atingida?.label || '-',
-        f?.comissao != null ? f.comissao.toFixed(2) : '-',
+        (v.valor_pa ?? 0).toFixed(2),
+        (v.total_recebido ?? 0).toFixed(2),
+        metaLabel, comissao,
       ].join(';');
     });
     const csv = [header, ...rows].join('\n');
@@ -231,9 +268,14 @@ export default function GestorPage() {
         <div className="grid grid-cols-3 gap-4">
           <div className="rounded-xl p-5 shadow-sm" style={{ background: '#00205C' }}>
             <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#94a3b8' }}>
-              Total Vendas (Equipe)
+              {todasTelevendas ? 'Total PA (Equipe)' : algumaTelevendas ? 'Total Vendas / PA (Equipe)' : 'Total Vendas (Equipe)'}
             </p>
-            <p className="text-2xl font-bold mt-2 text-white">{formatBRL(totalVendas)}</p>
+            <p className="text-2xl font-bold mt-2 text-white">{formatBRL(totalEquipeExibido)}</p>
+            {algumaTelevendas && !todasTelevendas && (
+              <p className="text-xs mt-0.5" style={{ color: '#94a3b8' }}>
+                PA: {formatBRL(totalPA)}
+              </p>
+            )}
             <p className="text-xs mt-1" style={{ color: '#FFD700' }}>
               {filtroSetor || 'Todos os setores'} — {ano}{mes ? ` / ${MESES[mes - 1]}` : ''}
             </p>
@@ -311,7 +353,7 @@ export default function GestorPage() {
                     { label: '#', align: 'left' },
                     { label: 'Vendedor', align: 'left' },
                     { label: 'Setor', align: 'left' },
-                    { label: 'Total Vendas', align: 'center' },
+                    { label: 'Vendas / Valor PA', align: 'center' },
                     { label: 'Meta Atingida', align: 'left' },
                     { label: 'Comissão Est.', align: 'center' },
                     { label: 'Atingimento', align: 'left' },
@@ -333,8 +375,37 @@ export default function GestorPage() {
                   </tr>
                 ) : (
                   vendedoresFiltrados.map((v, i) => {
-                    const f = getFaixa(v.vendedor, v.total_vendas);
-                    const pct = f?.referencia ? Math.min((v.total_vendas / f.referencia) * 100, 100) : 0;
+                    const ctv = v.is_televendas ? getComissaoTV(v) : null;
+                    const f = !v.is_televendas ? getFaixa(v.vendedor, v.total_vendas) : null;
+
+                    // Coluna "Total Vendas / Valor PA"
+                    const vendaCell = v.is_televendas ? (
+                      <div>
+                        <span className="font-semibold" style={{ color: '#00205C' }}>{formatBRL(v.valor_pa)}</span>
+                        <span className="ml-1 text-xs font-normal px-1 rounded" style={{ background: '#eff6ff', color: '#1d4ed8' }}>PA</span>
+                        {v.total_recebido > 0 && (
+                          <p className="text-xs mt-0.5" style={{ color: '#64748b' }}>Rec: {formatBRL(v.total_recebido)}</p>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="font-semibold" style={{ color: '#00205C' }}>{formatBRL(v.total_vendas)}</span>
+                    );
+
+                    // Meta atingida
+                    const temMetaCadastrada = !!metasMap[v.vendedor];
+                    const metaLabel = v.is_televendas ? ctv?.meta_atingida?.label : f?.atingida?.label;
+                    const metaValor = v.is_televendas ? ctv?.meta_atingida?.valor : f?.atingida?.valor;
+
+                    // Comissão estimada
+                    const comissaoVal = v.is_televendas ? ctv?.comissao_total : f?.comissao;
+
+                    // Atingimento (barra de progresso)
+                    const metaRef = v.is_televendas
+                      ? (Number(metasMap[v.vendedor]?.meta1_valor) || 0)
+                      : (f?.referencia ?? 0);
+                    const realizado = v.is_televendas ? v.valor_pa : v.total_vendas;
+                    const pct = metaRef > 0 ? Math.min((realizado / metaRef) * 100, 100) : 0;
+
                     return (
                       <tr
                         key={i}
@@ -349,26 +420,28 @@ export default function GestorPage() {
                           {v.vendedor}
                         </td>
                         <td className="px-4 py-3" style={{ color: '#64748b' }}>{v.setor}</td>
-                        <td className="px-4 py-3 text-center font-semibold" style={{ color: '#00205C' }}>
-                          {formatBRL(v.total_vendas)}
+                        <td className="px-4 py-3 text-center">
+                          {vendaCell}
                         </td>
                         <td className="px-4 py-3">
-                          {f?.atingida ? (
+                          {metaLabel ? (
                             <div>
                               <span className="px-2 py-0.5 rounded-full text-xs font-semibold" style={{ background: '#d1fae5', color: '#065f46' }}>
-                                {f.atingida.label}
+                                {metaLabel}
                               </span>
-                              <p className="text-xs mt-0.5" style={{ color: '#94a3b8' }}>{formatBRL(f.atingida.valor)}</p>
+                              {metaValor ? <p className="text-xs mt-0.5" style={{ color: '#94a3b8' }}>{formatBRL(metaValor)}</p> : null}
                             </div>
-                          ) : (
+                          ) : temMetaCadastrada ? (
                             <span className="text-xs" style={{ color: '#94a3b8' }}>Nenhuma</span>
+                          ) : (
+                            <span className="text-xs font-medium" style={{ color: '#f59e0b' }}>Meta não definida</span>
                           )}
                         </td>
                         <td className="px-4 py-3 text-center font-semibold" style={{ color: '#16a34a' }}>
-                          {f?.comissao != null ? formatBRL(f.comissao) : <span style={{ color: '#94a3b8' }}>—</span>}
+                          {comissaoVal != null ? formatBRL(comissaoVal) : <span style={{ color: '#94a3b8' }}>—</span>}
                         </td>
                         <td className="px-4 py-3" style={{ minWidth: 120 }}>
-                          {f?.referencia ? (
+                          {metaRef > 0 ? (
                             <div className="flex items-center gap-2">
                               <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
                                 <div

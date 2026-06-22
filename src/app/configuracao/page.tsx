@@ -1,6 +1,53 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
+
+// Input que aceita vírgula como separador decimal (pt-BR) sem resetar durante digitação
+function PctInput({ value, onChange, className, style, placeholder }: {
+  value: number;
+  onChange: (v: number) => void;
+  className?: string;
+  style?: React.CSSProperties;
+  placeholder?: string;
+}) {
+  const [raw, setRaw] = useState(value === 0 ? '' : String(value).replace('.', ','));
+  const lastExternal = useRef(value);
+
+  useEffect(() => {
+    if (value !== lastExternal.current) {
+      lastExternal.current = value;
+      setRaw(value === 0 ? '' : String(value).replace('.', ','));
+    }
+  }, [value]);
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={raw}
+      className={className}
+      style={style}
+      placeholder={placeholder}
+      onFocus={(e) => e.target.select()}
+      onChange={(e) => {
+        const txt = e.target.value;
+        setRaw(txt);
+        const parsed = parseFloat(txt.replace(',', '.'));
+        if (!isNaN(parsed)) {
+          lastExternal.current = parsed;
+          onChange(parsed);
+        }
+      }}
+      onBlur={() => {
+        const parsed = parseFloat(raw.replace(',', '.'));
+        const final = isNaN(parsed) ? 0 : parsed;
+        lastExternal.current = final;
+        onChange(final);
+        setRaw(final === 0 ? '' : String(final).replace('.', ','));
+      }}
+    />
+  );
+}
 import AppShell from '@/components/layout/AppShell';
 import { MESES } from '@/lib/format';
 import { Save, CheckCircle, AlertCircle, Calendar } from 'lucide-react';
@@ -361,12 +408,12 @@ export default function ConfiguracaoPage() {
                           {/* % Sem Meta */}
                           <div className="flex items-center gap-1.5 mx-2 px-2 py-1.5 rounded-lg"
                             style={{ background: '#fff1f2', border: '1px solid #fecdd3' }}>
-                            <input type="number" min={0} max={100} step={0.5}
+                            <PctInput
                               value={m.percentual_sem_meta}
-                              onChange={(e) => updateMensal(v, 'percentual_sem_meta', parseFloat(e.target.value) || 0)}
+                              onChange={(val) => updateMensal(v, 'percentual_sem_meta', val)}
                               className="flex-1 min-w-0 rounded px-1.5 py-1 text-xs text-center outline-none font-bold"
                               style={{ border: '1px solid #e2e8f0', color: '#991b1b', background: '#ffffff' }}
-                              placeholder="0" onFocus={(e) => e.target.select()} />
+                              placeholder="0" />
                             <span className="text-xs shrink-0" style={{ color: '#64748b' }}>%</span>
                           </div>
                         </div>

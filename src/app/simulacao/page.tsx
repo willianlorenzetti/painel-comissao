@@ -33,6 +33,7 @@ export default function SimulacaoPage() {
   const [modoReverso, setModoReverso] = useState(false);
   const [comissaoDesejada, setComissaoDesejada] = useState('');
   const [recebimentosReverso, setRecebimentosReverso] = useState('');
+  const [reversoCalculado, setReversoCalculado] = useState(false);
 
   useEffect(() => {
     if (!usuario || usuario === 'loading') return;
@@ -75,10 +76,11 @@ export default function SimulacaoPage() {
     setResultado(calcularComissaoTelevendas(pa, rec, metaConfig, bonusConfig));
   };
 
-  // Cálculo reverso: dado comissão desejada + recebimentos, qual PA mínimo por meta?
+  // Cálculo reverso: dado comissão desejada, quanto preciso vender em PA e quanto preciso receber?
+  // comissao = (pct/100) × recebimentos  →  recebimentos = comissao / (pct/100)
+  // PA mínimo = threshold da meta para ativá-la
   const calcularReverso = () => {
     const comissao = parseFloat(comissaoDesejada.replace(/\./g, '').replace(',', '.')) || 0;
-    const rec = parseFloat(recebimentosReverso.replace(/\./g, '').replace(',', '.')) || 0;
     if (!metaConfig || comissao <= 0) return null;
 
     const metas = [
@@ -88,25 +90,33 @@ export default function SimulacaoPage() {
     ].filter((m) => m.valor > 0 && m.pct > 0);
 
     return metas.map((m) => {
-      const comissaoMeta = (m.pct / 100) * rec;
-      const comissaoBonus = comissao - comissaoMeta;
-      // Descobre qual tier de bônus precisaria
-      let paTier: number | null = null;
-      if (bonusConfig && comissaoBonus > 0) {
+      // Recebimentos necessários só com comissão de meta (sem bônus)
+      const recNecessario = comissao / (m.pct / 100);
+
+      // Cenário com bônus: se atingir o maior tier de bônus compatível com o PA mínimo desta meta,
+      // o bônus contribui com parte da comissão → precisa de menos recebimentos
+      let recComBonus: number | null = null;
+      let bonusTierUsado: { label: string; pct: number; valor: number } | null = null;
+      if (bonusConfig) {
         const tiers = [
-          { valor: bonusConfig.bonus1_valor, pct: bonusConfig.bonus1_percentual },
-          { valor: bonusConfig.bonus2_valor, pct: bonusConfig.bonus2_percentual },
-          { valor: bonusConfig.bonus3_valor, pct: bonusConfig.bonus3_percentual },
-          { valor: bonusConfig.bonus4_valor, pct: bonusConfig.bonus4_percentual },
-          { valor: bonusConfig.bonus5_valor, pct: bonusConfig.bonus5_percentual },
-        ].filter((t) => t.valor > 0 && t.pct > 0);
-        for (const t of tiers) {
-          const paNecessario = comissaoBonus / (t.pct / 100);
-          if (paNecessario >= t.valor) { paTier = paNecessario; break; }
+          { label: 'Bônus 5', valor: bonusConfig.bonus5_valor, pct: bonusConfig.bonus5_percentual },
+          { label: 'Bônus 4', valor: bonusConfig.bonus4_valor, pct: bonusConfig.bonus4_percentual },
+          { label: 'Bônus 3', valor: bonusConfig.bonus3_valor, pct: bonusConfig.bonus3_percentual },
+          { label: 'Bônus 2', valor: bonusConfig.bonus2_valor, pct: bonusConfig.bonus2_percentual },
+          { label: 'Bônus 1', valor: bonusConfig.bonus1_valor, pct: bonusConfig.bonus1_percentual },
+        ].filter((t) => t.valor > 0 && t.pct > 0 && t.valor <= m.valor);
+        const tier = tiers[0] ?? null; // maior tier de bônus ativado quando PA = paMinimo da meta
+        if (tier) {
+          const comissaoBonus = (tier.pct / 100) * m.valor; // bônus mínimo com PA exatamente no threshold
+          const comissaoMetaNecessaria = comissao - comissaoBonus;
+          if (comissaoMetaNecessaria > 0) {
+            recComBonus = comissaoMetaNecessaria / (m.pct / 100);
+            bonusTierUsado = tier;
+          }
         }
       }
-      const paNecessario = paTier ?? m.valor;
-      return { ...m, paNecessario, comissaoMeta, comissaoBonus, viavel: rec > 0 };
+
+      return { label: m.label, pct: m.pct, paMinimo: m.valor, recNecessario, recComBonus, bonusTierUsado };
     });
   };
 
@@ -378,61 +388,76 @@ export default function SimulacaoPage() {
                   <TrendingUp size={15} className="inline mr-2" />
                   Quanto preciso vender?
                 </h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#64748b' }}>
-                      Comissão desejada
-                    </label>
-                    <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: '1px solid #e2e8f0' }}>
-                      <span className="text-sm" style={{ color: '#94a3b8' }}>R$</span>
-                      <input type="text" value={comissaoDesejada} onChange={(e) => setComissaoDesejada(e.target.value)}
-                        placeholder="0,00"
-                        className="flex-1 outline-none text-sm font-medium" style={{ color: '#0a1628' }}
-                        onFocus={(e) => e.target.select()} />
-                    </div>
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#64748b' }}>
-                      Recebimentos estimados
-                    </label>
-                    <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: '1px solid #e2e8f0' }}>
-                      <span className="text-sm" style={{ color: '#94a3b8' }}>R$</span>
-                      <input type="text" value={recebimentosReverso} onChange={(e) => setRecebimentosReverso(e.target.value)}
-                        placeholder="0,00"
-                        className="flex-1 outline-none text-sm font-medium" style={{ color: '#0a1628' }}
-                        onFocus={(e) => e.target.select()} />
-                    </div>
+                <p className="text-xs" style={{ color: '#64748b' }}>
+                  Informe a comissão total que deseja receber. O simulador mostra quanto você precisa vender em PA e quanto precisa receber para cada meta.
+                </p>
+
+                <div className="max-w-xs flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#64748b' }}>
+                    Comissão desejada
+                  </label>
+                  <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: '1px solid #e2e8f0' }}>
+                    <span className="text-sm" style={{ color: '#94a3b8' }}>R$</span>
+                    <input type="text" value={comissaoDesejada}
+                      onChange={(e) => { setComissaoDesejada(e.target.value); setReversoCalculado(false); }}
+                      placeholder="0,00"
+                      className="flex-1 outline-none text-sm font-medium" style={{ color: '#0a1628' }}
+                      onFocus={(e) => e.target.select()} />
                   </div>
                 </div>
 
-                {metasVisiveis.length > 0 && comissaoDesejada && recebimentosReverso && (
+                <button
+                  onClick={() => setReversoCalculado(true)}
+                  disabled={!comissaoDesejada}
+                  className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold disabled:opacity-40"
+                  style={{ background: '#00205C', color: '#FFD700' }}>
+                  <Calculator size={15} /> Calcular
+                </button>
+
+                {metasVisiveis.length > 0 && reversoCalculado && reversoResultado && (
                   <div className="space-y-3">
                     <p className="text-xs font-bold uppercase tracking-wide" style={{ color: '#64748b' }}>
-                      PA necessário por meta:
+                      O que você precisa por meta:
                     </p>
-                    {reversoResultado?.map((r, i) => (
-                      <div key={i} className="rounded-xl p-4" style={{ background: ['#eff6ff','#f0fdf4','#fffbeb'][i], border: `1px solid ${['#bfdbfe','#bbf7d0','#fde68a'][i]}` }}>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm font-bold" style={{ color: ['#1e40af','#065f46','#92400e'][i] }}>{r.label}</span>
-                          <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
-                            style={{ background: ['#dbeafe','#d1fae5','#fef3c7'][i], color: ['#1e40af','#065f46','#92400e'][i] }}>
-                            {r.pct}% sobre recebimentos
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-4 text-sm">
-                          <div>
-                            <p className="text-xs" style={{ color: '#64748b' }}>Comissão meta estimada</p>
-                            <p className="font-bold" style={{ color: '#0a1628' }}>{formatBRL(r.comissaoMeta)}</p>
+                    {reversoResultado.map((r, i) => {
+                      const colors = {
+                        bg: ['#eff6ff','#f0fdf4','#fffbeb'][i],
+                        border: ['#bfdbfe','#bbf7d0','#fde68a'][i],
+                        text: ['#1e40af','#065f46','#92400e'][i],
+                        badge: ['#dbeafe','#d1fae5','#fef3c7'][i],
+                      };
+                      return (
+                        <div key={i} className="rounded-xl p-4 space-y-3" style={{ background: colors.bg, border: `1px solid ${colors.border}` }}>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-bold" style={{ color: colors.text }}>{r.label}</span>
+                            <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: colors.badge, color: colors.text }}>
+                              {r.pct}% sobre recebimentos
+                            </span>
                           </div>
-                          <div>
-                            <p className="text-xs" style={{ color: '#64748b' }}>PA mínimo para esta meta</p>
-                            <p className="font-bold text-lg" style={{ color: ['#1e40af','#065f46','#92400e'][i] }}>
-                              {formatBRL(r.paNecessario)}
-                            </p>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="rounded-lg p-3" style={{ background: '#ffffff80' }}>
+                              <p className="text-xs font-medium mb-1" style={{ color: '#64748b' }}>Vendas PA mínimas</p>
+                              <p className="text-lg font-bold" style={{ color: colors.text }}>{formatBRL(r.paMinimo)}</p>
+                              <p className="text-xs mt-0.5" style={{ color: '#94a3b8' }}>threshold para ativar a meta</p>
+                            </div>
+                            <div className="rounded-lg p-3" style={{ background: '#ffffff80' }}>
+                              <p className="text-xs font-medium mb-1" style={{ color: '#64748b' }}>Recebimentos necessários</p>
+                              <p className="text-lg font-bold" style={{ color: colors.text }}>{formatBRL(r.recNecessario)}</p>
+                              <p className="text-xs mt-0.5" style={{ color: '#94a3b8' }}>para comissão de {formatBRL(parseFloat(comissaoDesejada.replace(/\./g,'').replace(',','.')) || 0)}</p>
+                            </div>
                           </div>
+                          {r.recComBonus !== null && r.bonusTierUsado && (
+                            <div className="rounded-lg p-3 flex items-start gap-3" style={{ background: '#f0fdf480', border: '1px solid #bbf7d0' }}>
+                              <Award size={14} className="mt-0.5 shrink-0" style={{ color: '#16a34a' }} />
+                              <div className="text-xs" style={{ color: '#065f46' }}>
+                                <span className="font-semibold">Com {r.bonusTierUsado.label} ({r.bonusTierUsado.pct}% bônus):</span>
+                                {' '}precisa de apenas <span className="font-bold">{formatBRL(r.recComBonus)}</span> em recebimentos
+                              </div>
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

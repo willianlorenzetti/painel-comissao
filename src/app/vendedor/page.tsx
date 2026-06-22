@@ -136,10 +136,22 @@ export default function VendedorPage() {
     : [];
 
   const isTelevendas = data?.is_televendas ?? false;
-  const ctv = data?.comissao_televendas;
   const bonusConfigData: BonusConfig | null = data?.bonus_config ?? null;
   const valorPAAtual = data?.valor_pa ?? 0;
   const recebidoAtual = data?.total_recebido ?? 0;
+
+  // MetaConfig montado direto do meta_vendedor para garantir percentual_sem_meta correto
+  const metaConfigObj: MetaConfig | null = metaIndividual ? {
+    meta1_valor: metaIndividual.meta1_valor, meta1_percentual: metaIndividual.meta1_percentual,
+    meta2_valor: metaIndividual.meta2_valor, meta2_percentual: metaIndividual.meta2_percentual,
+    meta3_valor: metaIndividual.meta3_valor, meta3_percentual: metaIndividual.meta3_percentual,
+    percentual_sem_meta: metaIndividual.percentual_sem_meta ?? 0,
+  } : null;
+
+  // Recalcula comissão televendas no frontend para garantir dados atualizados
+  const ctv = isTelevendas && mes
+    ? calcularComissaoTelevendas(valorPAAtual, recebidoAtual, metaConfigObj, bonusConfigData)
+    : null;
 
   const temMetaDefinida = faixas.some((f) => f.valor > 0);
   const compareRealizado = isTelevendas ? valorPAAtual : totalVendas;
@@ -159,12 +171,6 @@ export default function VendedorPage() {
   const projecaoVendas = temProjecao && !isTelevendas ? (totalVendas / diasDecorridos) * daysInMonth : 0;
   const projecaoPA = temProjecao && isTelevendas ? (valorPAAtual / diasDecorridos) * daysInMonth : 0;
   const projecaoRecebidos = temProjecao && isTelevendas ? (recebidoAtual / diasDecorridos) * daysInMonth : 0;
-  const metaConfigObj: MetaConfig | null = metaIndividual ? {
-    meta1_valor: metaIndividual.meta1_valor, meta1_percentual: metaIndividual.meta1_percentual,
-    meta2_valor: metaIndividual.meta2_valor, meta2_percentual: metaIndividual.meta2_percentual,
-    meta3_valor: metaIndividual.meta3_valor, meta3_percentual: metaIndividual.meta3_percentual,
-    percentual_sem_meta: metaIndividual.percentual_sem_meta ?? 0,
-  } : null;
   const ctvProjecao = isTelevendas && projecaoPA > 0
     ? calcularComissaoTelevendas(projecaoPA, projecaoRecebidos, metaConfigObj, bonusConfigData)
     : null;
@@ -325,8 +331,8 @@ export default function VendedorPage() {
             ) : (
               <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${faixas.length}, 1fr)` }}>
                 {faixas.map((f, i) => {
-                  const pct = f.valor > 0 ? Math.min((totalVendas / f.valor) * 100, 100) : 0;
-                  const atingida = f.valor > 0 && totalVendas >= f.valor;
+                  const pct = f.valor > 0 ? Math.min((compareRealizado / f.valor) * 100, 100) : 0;
+                  const atingida = f.valor > 0 && compareRealizado >= f.valor;
                   const cor = CORES_FAIXA[i] || CORES_FAIXA[0];
                   return (
                     <div key={i} className="rounded-lg p-3" style={{ background: cor.bg, border: `1px solid ${cor.bar}` }}>
@@ -495,8 +501,9 @@ export default function VendedorPage() {
                       </div>
                     </div>
                     {faixas.filter(f => f.valor > 0).map((f, i) => {
-                      const pctMeta = Math.min((f.valor / base) * 100, 100);
                       const atingeProj = projecaoExibida >= f.valor;
+                      // % de progresso em direção a CADA meta individualmente (não posição na escala comum)
+                      const pctMeta = Math.min((projecaoExibida / f.valor) * 100, 100);
                       return (
                         <div key={i}>
                           <div className="flex justify-between text-xs mb-1" style={{ color: '#64748b' }}>
@@ -506,7 +513,7 @@ export default function VendedorPage() {
                             </span>
                           </div>
                           <div className="h-1.5 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
-                            <div className="h-full rounded-full" style={{ width: `${pctMeta}%`, background: atingeProj ? '#16a34a' : '#e2e8f0' }} />
+                            <div className="h-full rounded-full" style={{ width: `${pctMeta}%`, background: atingeProj ? '#16a34a' : '#94a3b8' }} />
                           </div>
                         </div>
                       );
@@ -543,47 +550,47 @@ export default function VendedorPage() {
               </p>
 
               {isTelevendas ? (
-                ctvProjecao && (
-                  <div className="space-y-3">
-                    <div>
-                      <div className="flex justify-between text-xs mb-1" style={{ color: '#64748b' }}>
-                        <span>Comissão atual</span>
-                        <span>{ctv ? formatBRL(ctv.comissao_total) : '—'}</span>
+                ctvProjecao && (() => {
+                  const maxComissao = Math.max(ctvProjecao.comissao_total, ctv?.comissao_total || 0) * 1.05 || 1;
+                  return (
+                    <div className="space-y-3">
+                      <div>
+                        <div className="flex justify-between text-xs mb-1" style={{ color: '#64748b' }}>
+                          <span>Comissão atual</span>
+                          <span>{ctv ? formatBRL(ctv.comissao_total) : '—'}</span>
+                        </div>
+                        <div className="h-3 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
+                          <div className="h-full rounded-full" style={{ width: `${Math.min(((ctv?.comissao_total || 0) / maxComissao) * 100, 100)}%`, background: '#00205C' }} />
+                        </div>
                       </div>
-                      <div className="h-3 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
-                        {(() => {
-                          const max = Math.max(ctvProjecao.comissao_total, ctv?.comissao_total || 0) * 1.05 || 1;
-                          return <div className="h-full rounded-full" style={{ width: `${Math.min(((ctv?.comissao_total || 0) / max) * 100, 100)}%`, background: '#00205C' }} />;
-                        })()}
+                      <div>
+                        <div className="flex justify-between text-xs mb-1" style={{ color: '#64748b' }}>
+                          <span>Comissão projetada</span>
+                          <span style={{ color: '#16a34a', fontWeight: 600 }}>{formatBRL(ctvProjecao.comissao_total)}</span>
+                        </div>
+                        <div className="h-3 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
+                          <div className="h-full rounded-full" style={{ width: `${Math.min((ctvProjecao.comissao_total / maxComissao) * 100, 100)}%`, background: '#FFD700' }} />
+                        </div>
+                      </div>
+                      <div className="pt-2 grid grid-cols-2 gap-2">
+                        <div className="rounded-lg p-2 text-center" style={{ background: ctvProjecao.meta_atingida ? '#f0fdf4' : '#fff1f2', border: `1px solid ${ctvProjecao.meta_atingida ? '#bbf7d0' : '#fecdd3'}` }}>
+                          <p className="text-xs font-semibold mb-0.5" style={{ color: ctvProjecao.meta_atingida ? '#065f46' : '#991b1b' }}>Meta projetada</p>
+                          <p className="text-xs font-bold" style={{ color: ctvProjecao.meta_atingida ? '#065f46' : '#991b1b' }}>
+                            {ctvProjecao.meta_atingida?.label ?? 'Nenhuma'}
+                          </p>
+                          <p className="text-sm font-bold mt-1" style={{ color: ctvProjecao.meta_atingida ? '#16a34a' : '#dc2626' }}>{formatBRL(ctvProjecao.comissao_meta)}</p>
+                        </div>
+                        <div className="rounded-lg p-2 text-center" style={{ background: ctvProjecao.bonus_desbloqueado ? '#f0fdf4' : '#f8fafc', border: `1px solid ${ctvProjecao.bonus_desbloqueado ? '#bbf7d0' : '#e2e8f0'}` }}>
+                          <p className="text-xs font-semibold mb-0.5" style={{ color: ctvProjecao.bonus_desbloqueado ? '#065f46' : '#94a3b8' }}>Bônus projetado</p>
+                          <p className="text-xs font-bold" style={{ color: ctvProjecao.bonus_desbloqueado ? '#065f46' : '#94a3b8' }}>
+                            {ctvProjecao.bonus_tier?.label ?? (ctvProjecao.bonus_desbloqueado ? 'Sem tier' : 'Não desbloqueado')}
+                          </p>
+                          <p className="text-sm font-bold mt-1" style={{ color: ctvProjecao.bonus_desbloqueado ? '#16a34a' : '#94a3b8' }}>{formatBRL(ctvProjecao.comissao_bonus)}</p>
+                        </div>
                       </div>
                     </div>
-                    <div>
-                      <div className="flex justify-between text-xs mb-1" style={{ color: '#64748b' }}>
-                        <span>Comissão projetada</span>
-                        <span style={{ color: '#16a34a', fontWeight: 600 }}>{formatBRL(ctvProjecao.comissao_total)}</span>
-                      </div>
-                      <div className="h-3 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
-                        <div className="h-full rounded-full" style={{ width: '100%', background: '#FFD700' }} />
-                      </div>
-                    </div>
-                    <div className="pt-2 grid grid-cols-2 gap-2">
-                      <div className="rounded-lg p-2 text-center" style={{ background: ctvProjecao.meta_atingida ? '#f0fdf4' : '#fff1f2', border: `1px solid ${ctvProjecao.meta_atingida ? '#bbf7d0' : '#fecdd3'}` }}>
-                        <p className="text-xs font-semibold mb-0.5" style={{ color: ctvProjecao.meta_atingida ? '#065f46' : '#991b1b' }}>Meta projetada</p>
-                        <p className="text-xs font-bold" style={{ color: ctvProjecao.meta_atingida ? '#065f46' : '#991b1b' }}>
-                          {ctvProjecao.meta_atingida?.label ?? 'Nenhuma'}
-                        </p>
-                        <p className="text-sm font-bold mt-1" style={{ color: ctvProjecao.meta_atingida ? '#16a34a' : '#dc2626' }}>{formatBRL(ctvProjecao.comissao_meta)}</p>
-                      </div>
-                      <div className="rounded-lg p-2 text-center" style={{ background: ctvProjecao.bonus_desbloqueado ? '#f0fdf4' : '#f8fafc', border: `1px solid ${ctvProjecao.bonus_desbloqueado ? '#bbf7d0' : '#e2e8f0'}` }}>
-                        <p className="text-xs font-semibold mb-0.5" style={{ color: ctvProjecao.bonus_desbloqueado ? '#065f46' : '#94a3b8' }}>Bônus projetado</p>
-                        <p className="text-xs font-bold" style={{ color: ctvProjecao.bonus_desbloqueado ? '#065f46' : '#94a3b8' }}>
-                          {ctvProjecao.bonus_tier?.label ?? (ctvProjecao.bonus_desbloqueado ? 'Sem tier' : 'Não desbloqueado')}
-                        </p>
-                        <p className="text-sm font-bold mt-1" style={{ color: ctvProjecao.bonus_desbloqueado ? '#16a34a' : '#94a3b8' }}>{formatBRL(ctvProjecao.comissao_bonus)}</p>
-                      </div>
-                    </div>
-                  </div>
-                )
+                  );
+                })()
               ) : (
                 faixas.filter(f => f.valor > 0).length > 0 && (() => {
                   const comissoes_proj = faixas.filter(f => f.valor > 0).map(f => ({

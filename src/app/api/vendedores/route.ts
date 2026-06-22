@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getPool, sql } from '@/lib/db';
 import { getUsuario, podeVerTudo, buildSetorFilter } from '@/lib/permissions';
 import { addSetoresGlobais } from '@/lib/setores';
+import { isTelevendas } from '@/lib/commission';
 
 export async function GET(req: NextRequest) {
   const email = req.headers.get('x-user-email');
@@ -55,19 +56,38 @@ export async function GET(req: NextRequest) {
       where += ' AND LTRIM(RTRIM(EMP)) = @empresa';
     }
 
-    const result = await request.query(`
-      SELECT USU_NOME as vendedor, RVS_NOME as setor,
-             MIN(LTRIM(RTRIM(EMP))) as empresa,
-             SUM([SUM]) as total_vendas, SUM(QTDE) as total_qtde,
-             COUNT(*) as total_registros,
-             MIN(PDV_DATA) as primeira_venda, MAX(PDV_DATA) as ultima_venda
-      FROM [TI-COMERCIAL_45-VendaPorSetor]
-      ${where}
-      GROUP BY USU_NOME, RVS_NOME
-      ORDER BY total_vendas DESC
-    `);
+    const [result, recResult] = await Promise.all([
+      request.query(`
+        SELECT USU_NOME as vendedor, RVS_NOME as setor,
+               MIN(LTRIM(RTRIM(EMP))) as empresa,
+               SUM([SUM]) as total_vendas, SUM(QTDE) as total_qtde,
+               COUNT(*) as total_registros,
+               MIN(PDV_DATA) as primeira_venda, MAX(PDV_DATA) as ultima_venda,
+               SUM(CASE WHEN SUBGRUPO = 'CHAVE' OR GRUPO IN ('PRODUÇÃO','DOVALE') THEN [SUM] ELSE 0 END) as valor_pa
+        FROM [TI-COMERCIAL_45-VendaPorSetor]
+        ${where}
+        GROUP BY USU_NOME, RVS_NOME
+        ORDER BY total_vendas DESC
+      `),
+      pool.request()
+        .input('recInicio', sql.Date, dataInicio)
+        .input('recFim', sql.Date, dataFim)
+        .query(`SELECT REP_NOME as vendedor, SUM(TOTAL) as total_recebido
+                FROM [TI-FINANCEIRO_55-Recebimento]
+                WHERE DATABAIXA >= @recInicio AND DATABAIXA <= @recFim
+                GROUP BY REP_NOME`)
+        .catch(() => ({ recordset: [] as Array<{ vendedor: string; total_recebido: number }> })),
+    ]);
 
-    return NextResponse.json(result.recordset);
+    const recMap: Record<string, number> = {};
+    for (const r of recResult.recordset) recMap[String(r.vendedor)] = Number(r.total_recebido ?? 0);
+
+    return NextResponse.json(result.recordset.map((v) => ({
+      ...v,
+      valor_pa: Number(v.valor_pa ?? 0),
+      total_recebido: recMap[v.vendedor] ?? 0,
+      is_televendas: isTelevendas(v.setor),
+    })));
   } catch (error) {
     console.error('Erro ao buscar vendedores:', error);
     return NextResponse.json({ error: 'Erro ao buscar dados' }, { status: 500 });

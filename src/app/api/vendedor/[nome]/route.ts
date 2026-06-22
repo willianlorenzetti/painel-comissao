@@ -125,36 +125,32 @@ export async function GET(
     const valor_ferragens_pa = Number(paResult.recordset[0]?.valor_ferragens_pa ?? 0);
     const valor_mercadoria = Number(paResult.recordset[0]?.valor_mercadoria ?? 0);
 
+    // Garante que a coluna PERCENTUAL_SEM_META existe (cria se necessário)
+    await pool.request().query(`
+      IF NOT EXISTS (
+        SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = 'TI-PAINELCOMISSAO_METAS' AND COLUMN_NAME = 'PERCENTUAL_SEM_META'
+      )
+      BEGIN
+        ALTER TABLE [TI-PAINELCOMISSAO_METAS] ADD PERCENTUAL_SEM_META FLOAT DEFAULT 0;
+      END
+    `).catch(() => {});
+
     // Busca meta mensal
     let metaVendedor = { recordset: [] as Array<Record<string, unknown>> };
     if (mes) {
-      try {
-        metaVendedor = await pool
-          .request()
-          .input('nomeVend', sql.VarChar, vendedor)
-          .input('anoMeta',  sql.Int,     parseInt(ano))
-          .input('mesMeta',  sql.VarChar, mes)
-          .query(`SELECT META1_VALOR as meta1_valor, META1_PERCENTUAL as meta1_percentual,
-                         META2_VALOR as meta2_valor, META2_PERCENTUAL as meta2_percentual,
-                         META3_VALOR as meta3_valor, META3_PERCENTUAL as meta3_percentual,
-                         ISNULL(PERCENTUAL_SEM_META,0) as percentual_sem_meta
-                  FROM [TI-PAINELCOMISSAO_METAS]
-                  WHERE VENDEDOR=@nomeVend AND ANO=@anoMeta AND MES=@mesMeta`);
-      } catch {
-        // PERCENTUAL_SEM_META coluna pode não existir ainda — retry sem ela
-        metaVendedor = await pool
-          .request()
-          .input('nomeVend', sql.VarChar, vendedor)
-          .input('anoMeta',  sql.Int,     parseInt(ano))
-          .input('mesMeta',  sql.VarChar, mes)
-          .query(`SELECT META1_VALOR as meta1_valor, META1_PERCENTUAL as meta1_percentual,
-                         META2_VALOR as meta2_valor, META2_PERCENTUAL as meta2_percentual,
-                         META3_VALOR as meta3_valor, META3_PERCENTUAL as meta3_percentual,
-                         0 as percentual_sem_meta
-                  FROM [TI-PAINELCOMISSAO_METAS]
-                  WHERE VENDEDOR=@nomeVend AND ANO=@anoMeta AND MES=@mesMeta`)
-          .catch(() => ({ recordset: [] as Array<Record<string, unknown>> }));
-      }
+      metaVendedor = await pool
+        .request()
+        .input('nomeVend', sql.VarChar, vendedor)
+        .input('anoMeta',  sql.Int,     parseInt(ano))
+        .input('mesMeta',  sql.VarChar, mes)
+        .query(`SELECT META1_VALOR as meta1_valor, META1_PERCENTUAL as meta1_percentual,
+                       META2_VALOR as meta2_valor, META2_PERCENTUAL as meta2_percentual,
+                       META3_VALOR as meta3_valor, META3_PERCENTUAL as meta3_percentual,
+                       ISNULL(PERCENTUAL_SEM_META,0) as percentual_sem_meta
+                FROM [TI-PAINELCOMISSAO_METAS]
+                WHERE VENDEDOR=@nomeVend AND ANO=@anoMeta AND MES=@mesMeta`)
+        .catch(() => ({ recordset: [] as Array<Record<string, unknown>> }));
     }
     if (!metaVendedor.recordset.length) {
       metaVendedor = await pool
