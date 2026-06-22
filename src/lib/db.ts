@@ -10,20 +10,27 @@ const config: sql.config = {
     encrypt: false,
     trustServerCertificate: true,
   },
+  connectionTimeout: 15000,
+  requestTimeout: 30000,
   pool: {
-    max: 10,
-    min: 0,
-    idleTimeoutMillis: 30000,
+    max: 25,
+    min: 2,           // mantém 2 conexões sempre abertas — evita reconexão a cada request
+    idleTimeoutMillis: 120000, // fecha conexão ociosa só após 2 min
   },
 };
 
 let pool: sql.ConnectionPool | null = null;
+let poolPromise: Promise<sql.ConnectionPool> | null = null;
 
 export async function getPool(): Promise<sql.ConnectionPool> {
-  if (!pool || !pool.connected) {
-    pool = await sql.connect(config);
+  if (pool?.connected) return pool;
+  // Promise-lock: evita múltiplas conexões simultâneas em requests paralelos
+  if (!poolPromise) {
+    poolPromise = sql.connect(config)
+      .then((p) => { pool = p; poolPromise = null; return p; })
+      .catch((err) => { poolPromise = null; throw err; });
   }
-  return pool;
+  return poolPromise;
 }
 
 export { sql };

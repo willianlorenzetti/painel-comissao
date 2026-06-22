@@ -12,7 +12,10 @@ export interface Usuario {
   ativo: boolean;
 }
 
+let _tableReady = false;
+
 export async function ensureUsuarioTable() {
+  if (_tableReady) return;
   const pool = await getPool();
   await pool.request().query(`
     IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='UsuarioPermissao' AND xtype='U')
@@ -28,9 +31,17 @@ export async function ensureUsuarioTable() {
       atualizado_em DATETIME DEFAULT GETDATE()
     )
   `);
+  _tableReady = true;
 }
 
+// Cache de usuário por 60 segundos — evita query ao banco em cada API call
+const _usuarioCache = new Map<string, { usuario: Usuario | null; exp: number }>();
+
 export async function getUsuario(email: string): Promise<Usuario | null> {
+  const key = email.toLowerCase();
+  const cached = _usuarioCache.get(key);
+  if (cached && cached.exp > Date.now()) return cached.usuario;
+
   await ensureUsuarioTable();
   const pool = await getPool();
 
@@ -54,21 +65,16 @@ export async function getUsuario(email: string): Promise<Usuario | null> {
           INSERT INTO UsuarioPermissao (email, nome, cargo, ativo)
           VALUES (@email, @nome, 'ADM', 1)
         `);
-      return {
-        id: 1,
-        email: email.toLowerCase(),
-        nome,
-        cargo: 'ADM',
-        setores: [],
-        nome_vendedor: null,
-        ativo: true,
-      };
+      const adm: Usuario = { id: 1, email: email.toLowerCase(), nome, cargo: 'ADM', setores: [], nome_vendedor: null, ativo: true };
+      _usuarioCache.set(key, { usuario: adm, exp: Date.now() + 60_000 });
+      return adm;
     }
+    _usuarioCache.set(key, { usuario: null, exp: Date.now() + 10_000 });
     return null;
   }
 
   const row = result.recordset[0];
-  return {
+  const usuario: Usuario = {
     id: row.id,
     email: row.email,
     nome: row.nome,
@@ -77,6 +83,8 @@ export async function getUsuario(email: string): Promise<Usuario | null> {
     nome_vendedor: row.nome_vendedor,
     ativo: Boolean(row.ativo),
   };
+  _usuarioCache.set(key, { usuario, exp: Date.now() + 60_000 });
+  return usuario;
 }
 
 export function podeVerTudo(cargo: Cargo): boolean {

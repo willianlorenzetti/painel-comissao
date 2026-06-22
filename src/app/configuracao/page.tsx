@@ -109,7 +109,7 @@ export default function ConfiguracaoPage() {
   const [savedBonus, setSavedBonus] = useState(false);
 
   useEffect(() => {
-    if (usuario && usuario !== 'loading' && usuario.cargo !== 'ADM') {
+    if (usuario && usuario !== 'loading' && !['ADM', 'GESTOR'].includes(usuario.cargo)) {
       router.push('/sem-acesso');
     }
   }, [usuario, router]);
