@@ -152,7 +152,8 @@ export default function GestorPage() {
 
   const top8Grafico = vendedoresFiltrados.slice(0, 8).map((v) => ({
     name: nomeAbrev(v.vendedor),
-    Vendas: v.total_vendas,
+    Faturamento: v.total_vendas,
+    PA: v.valor_pa ?? 0,
   }));
 
   const exportCSV = () => {
@@ -302,28 +303,56 @@ export default function GestorPage() {
 
         {/* Gráfico Top vendedores */}
         <div className="rounded-xl p-5 shadow-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
-          <h2 className="text-sm font-semibold mb-4" style={{ color: '#00205C' }}>
-            Top 8 Vendedores por Faturamento
-          </h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-semibold" style={{ color: '#00205C' }}>
+              Top 8 Vendedores — Faturamento e PA
+            </h2>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded-sm" style={{ background: '#00205C' }} />
+                <span className="text-xs" style={{ color: '#64748b' }}>Faturamento</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-3 h-3 rounded-sm" style={{ background: '#FFD700' }} />
+                <span className="text-xs" style={{ color: '#64748b' }}>Valor PA</span>
+              </div>
+            </div>
+          </div>
           {loading ? (
             <div className="h-48 flex items-center justify-center text-sm" style={{ color: '#94a3b8' }}>Carregando...</div>
           ) : (
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={top8Grafico} barCategoryGap="30%">
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={top8Grafico} barCategoryGap="25%" barGap={3}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                 <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} />
                 <YAxis
                   tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
                   tick={{ fontSize: 10, fill: '#64748b' }}
+                  domain={[0, (dataMax: number) => Math.ceil(dataMax * 1.18 / 10000) * 10000]}
                 />
                 <Tooltip
                   formatter={(v, name) => [formatBRL(Number(v)), String(name)]}
-                  contentStyle={{ background: '#0a1628', border: 'none', borderRadius: 8, color: '#fff' }}
+                  contentStyle={{ background: '#0a1628', border: 'none', borderRadius: 8 }}
                   labelStyle={{ color: '#ffffff' }}
                   itemStyle={{ color: '#ffffff' }}
                 />
-                <Bar dataKey="Vendas" fill="#00205C" radius={[4, 4, 0, 0]}>
-                  <LabelList dataKey="Vendas" position="top" formatter={(v: number) => formatBRL(v)} style={{ fontSize: 10, fill: '#64748b' }} />
+                <Bar dataKey="Faturamento" fill="#00205C" radius={[3, 3, 0, 0]}>
+                  <LabelList
+                    dataKey="Faturamento"
+                    position="insideTop"
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    formatter={(v: any) => v > 0 ? `${(Number(v) / 1000).toFixed(0)}k` : ''}
+                    style={{ fontSize: 9, fill: '#ffffff', fontWeight: 600 }}
+                  />
+                </Bar>
+                <Bar dataKey="PA" fill="#FFD700" radius={[3, 3, 0, 0]}>
+                  <LabelList
+                    dataKey="PA"
+                    position="insideTop"
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    formatter={(v: any) => v > 0 ? `${(Number(v) / 1000).toFixed(0)}k` : ''}
+                    style={{ fontSize: 9, fill: '#00205C', fontWeight: 600 }}
+                  />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>

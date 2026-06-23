@@ -3,11 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import AppShell from '@/components/layout/AppShell';
 import KPICard from '@/components/ui/KPICard';
-import { formatBRL, formatNumber, MESES, CORES_GRAFICO } from '@/lib/format';
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, LineChart, Line, Cell, LabelList,
-} from 'recharts';
+import { formatBRL, formatNumber, MESES } from '@/lib/format';
 import { DollarSign, TrendingUp, ChevronDown, Search, User } from 'lucide-react';
 import { useUser } from '@/components/providers/UserProvider';
 import { calcularComissaoTelevendas, type MetaConfig, type BonusConfig } from '@/lib/commission';
@@ -43,6 +39,17 @@ interface VendedorData {
 }
 
 interface ComissaoConfig { setor: string; percentual: number; meta_mensal: number; }
+
+function contarDiasUteis(ano: number, mes: number, ate?: number): number {
+  const totalDias = new Date(ano, mes, 0).getDate();
+  const limite = ate ?? totalDias;
+  let count = 0;
+  for (let d = 1; d <= limite; d++) {
+    const dow = new Date(ano, mes - 1, d).getDay(); // 0=Dom, 6=Sáb
+    if (dow !== 0 && dow !== 6) count++;
+  }
+  return count;
+}
 
 const CORES_FAIXA = [
   { bg: '#eff6ff', fill: '#3b82f6', text: '#1e40af', bar: '#dbeafe' },
@@ -160,17 +167,18 @@ export default function VendedorPage() {
     ? (ctv?.comissao_total ?? null)
     : faixaAtingida ? (totalVendas * faixaAtingida.percentual) / 100 : null;
 
-  // Projeção do mês
+  // Projeção do mês — baseada em dias úteis (seg–sex)
   const hoje = new Date();
   const mesSel = mes || hoje.getMonth() + 1;
   const anoSel = ano;
   const daysInMonth = new Date(anoSel, mesSel, 0).getDate();
   const isMesAtual = mesSel === hoje.getMonth() + 1 && anoSel === hoje.getFullYear();
-  const diasDecorridos = isMesAtual ? hoje.getDate() : daysInMonth;
-  const temProjecao = mes !== null && (isTelevendas ? valorPAAtual > 0 : totalVendas > 0) && diasDecorridos > 0;
-  const projecaoVendas = temProjecao && !isTelevendas ? (totalVendas / diasDecorridos) * daysInMonth : 0;
-  const projecaoPA = temProjecao && isTelevendas ? (valorPAAtual / diasDecorridos) * daysInMonth : 0;
-  const projecaoRecebidos = temProjecao && isTelevendas ? (recebidoAtual / diasDecorridos) * daysInMonth : 0;
+  const diasUteisNoMes = contarDiasUteis(anoSel, mesSel);
+  const diasUteisDecorridos = isMesAtual ? contarDiasUteis(anoSel, mesSel, hoje.getDate()) : diasUteisNoMes;
+  const temProjecao = mes !== null && (isTelevendas ? valorPAAtual > 0 : totalVendas > 0) && diasUteisDecorridos > 0;
+  const projecaoVendas = temProjecao && !isTelevendas ? (totalVendas / diasUteisDecorridos) * diasUteisNoMes : 0;
+  const projecaoPA = temProjecao && isTelevendas ? (valorPAAtual / diasUteisDecorridos) * diasUteisNoMes : 0;
+  const projecaoRecebidos = temProjecao && isTelevendas ? (recebidoAtual / diasUteisDecorridos) * diasUteisNoMes : 0;
   const ctvProjecao = isTelevendas && projecaoPA > 0
     ? calcularComissaoTelevendas(projecaoPA, projecaoRecebidos, metaConfigObj, bonusConfigData)
     : null;
@@ -181,16 +189,6 @@ export default function VendedorPage() {
   const projecaoComissao = isTelevendas
     ? (ctvProjecao?.comissao_total ?? null)
     : faixaProjetada ? (projecaoVendas * faixaProjetada.percentual) / 100 : null;
-
-  const mensalGrafico = MESES.map((nome, i) => {
-    const found = data?.mensal.find((m) => m.mes === i + 1);
-    return { name: nome, Vendas: found?.total_vendas || 0 };
-  });
-
-  const subgrupoGrafico = data?.porSubgrupo.slice(0, 8).map((s) => ({
-    name: s.subgrupo || 'Outros',
-    Vendas: s.total_vendas,
-  })) || [];
 
   return (
     <AppShell>
@@ -206,7 +204,7 @@ export default function VendedorPage() {
             {/* Slicer de vendedor */}
             {!isVendedor && (
               <div className="relative">
-                <Search size={14} className="absolute left-2.5 top-2.5 pointer-events-none z-10" style={{ color: '#FFD700' }} />
+                <Search size={14} className="absolute left-2.5 top-2.5 pointer-events-none z-10" style={{ color: '#64748b' }} />
                 <input
                   ref={inputRef}
                   type="text"
@@ -215,7 +213,7 @@ export default function VendedorPage() {
                   onFocus={() => { setBusca(''); setAberto(true); }}
                   placeholder="Buscar vendedor..."
                   className="rounded-lg pl-8 pr-3 py-2 text-sm font-medium w-64 outline-none"
-                  style={{ background: '#00205C', border: 'none', color: '#FFD700' }}
+                  style={{ background: '#ffffff', border: '1px solid #e2e8f0', color: '#00205C' }}
                 />
                 {aberto && vendedoresFiltrados.length > 0 && (
                   <div
@@ -465,7 +463,7 @@ export default function VendedorPage() {
                   {isTelevendas ? 'Projeção de PA' : 'Projeção de Vendas'} — {MESES[mesSel - 1]}
                 </h2>
                 <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#eff6ff', color: '#1e40af' }}>
-                  Dia {diasDecorridos}/{daysInMonth}
+                  Dia {hoje.getDate()}/{daysInMonth} • {diasUteisDecorridos}/{diasUteisNoMes} DU
                 </span>
               </div>
 
@@ -473,7 +471,7 @@ export default function VendedorPage() {
                 {formatBRL(projecaoExibida)}
               </p>
               <p className="text-xs mb-4" style={{ color: '#64748b' }}>
-                Ritmo: {formatBRL((isTelevendas ? valorPAAtual : totalVendas) / diasDecorridos)}/dia &bull; Realizado: {formatBRL(isTelevendas ? valorPAAtual : totalVendas)}
+                Ritmo: {formatBRL((isTelevendas ? valorPAAtual : totalVendas) / diasUteisDecorridos)}/dia útil &bull; Realizado: {formatBRL(isTelevendas ? valorPAAtual : totalVendas)}
               </p>
 
               {(() => {
@@ -646,58 +644,6 @@ export default function VendedorPage() {
           </div>
         )}
 
-        {/* Gráficos */}
-        <div className="grid grid-cols-2 gap-4">
-          <div className="rounded-xl p-5 shadow-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
-            <h2 className="text-sm font-semibold mb-4" style={{ color: '#00205C' }}>Evolução Mensal — {ano}</h2>
-            {loading ? (
-              <div className="h-48 flex items-center justify-center text-sm" style={{ color: '#94a3b8' }}>Carregando...</div>
-            ) : (
-              <ResponsiveContainer width="100%" height={200}>
-                <LineChart data={mensalGrafico}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} />
-                  <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 10, fill: '#64748b' }} />
-                  <Tooltip
-                    formatter={(v) => [formatBRL(Number(v)), 'Vendas']}
-                    contentStyle={{ background: '#0a1628', border: 'none', borderRadius: 8 }}
-                    labelStyle={{ color: '#ffffff' }}
-                    itemStyle={{ color: '#FFD700' }}
-                  />
-                  <Line type="monotone" dataKey="Vendas" stroke="#FFD700" strokeWidth={2.5}
-                    dot={{ fill: '#00205C', r: 3 }} activeDot={{ r: 5, fill: '#FFD700' }} />
-                </LineChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-
-          <div className="rounded-xl p-5 shadow-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
-            <h2 className="text-sm font-semibold mb-4" style={{ color: '#00205C' }}>Vendas por Subgrupo</h2>
-            {loading ? (
-              <div className="h-48 flex items-center justify-center text-sm" style={{ color: '#94a3b8' }}>Carregando...</div>
-            ) : (
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={subgrupoGrafico} layout="vertical" margin={{ right: 110 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
-                  <XAxis type="number" tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 10, fill: '#64748b' }} />
-                  <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} width={110} />
-                  <Tooltip
-                    formatter={(v) => [formatBRL(Number(v)), 'Vendas']}
-                    contentStyle={{ background: '#0a1628', border: 'none', borderRadius: 8 }}
-                    labelStyle={{ color: '#ffffff' }}
-                    itemStyle={{ color: '#FFD700' }}
-                  />
-                  <Bar dataKey="Vendas" radius={[0, 4, 4, 0]}>
-                    {subgrupoGrafico.map((_, i) => (
-                      <Cell key={i} fill={CORES_GRAFICO[i % CORES_GRAFICO.length]} />
-                    ))}
-                    <LabelList dataKey="Vendas" position="right" formatter={(v: number) => formatBRL(v)} style={{ fontSize: 10, fill: '#64748b' }} />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
       </div>
     </AppShell>
   );
