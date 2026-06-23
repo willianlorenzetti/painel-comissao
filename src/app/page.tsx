@@ -4,23 +4,7 @@ import { useEffect, useState } from 'react';
 import AppShell from '@/components/layout/AppShell';
 import KPICard from '@/components/ui/KPICard';
 import { DashboardSummary } from '@/types';
-import { formatBRL, formatNumber, MESES, CORES_GRAFICO } from '@/lib/format';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  PieChart,
-  Pie,
-  Cell,
-  Legend,
-  LabelList,
-} from 'recharts';
+import { formatBRL, formatNumber, MESES } from '@/lib/format';
 import {
   DollarSign,
   Users,
@@ -28,17 +12,84 @@ import {
   Building2,
   RefreshCw,
   ChevronDown,
+  ArrowUpRight,
+  BarChart2,
+  Wallet,
+  Award,
 } from 'lucide-react';
 
 const ANO_ATUAL = new Date().getFullYear();
 const ANOS = [ANO_ATUAL, ANO_ATUAL - 1, ANO_ATUAL - 2];
 
-function TooltipPie({ active, payload }: { active?: boolean; payload?: Array<{ name: string; value: number }> }) {
-  if (!active || !payload?.length) return null;
+function contarDiasUteis(ano: number, mes: number, ate?: number): number {
+  const totalDias = new Date(ano, mes, 0).getDate();
+  const limite = ate ?? totalDias;
+  let count = 0;
+  for (let d = 1; d <= limite; d++) {
+    const dow = new Date(ano, mes - 1, d).getDay();
+    if (dow !== 0 && dow !== 6) count++;
+  }
+  return count;
+}
+
+function ProjecaoCard({
+  icon,
+  title,
+  atual,
+  projecao,
+  pctDU,
+  duDecorridos,
+  duTotal,
+  isMesAtual,
+  accentColor = '#00205C',
+}: {
+  icon: React.ReactNode;
+  title: string;
+  atual: number;
+  projecao: number;
+  pctDU: number;
+  duDecorridos: number;
+  duTotal: number;
+  isMesAtual: boolean;
+  accentColor?: string;
+}) {
   return (
-    <div style={{ background: '#0a1628', borderRadius: 8, padding: '8px 12px', fontSize: 11 }}>
-      <p style={{ color: '#ffffff', fontWeight: 600, marginBottom: 4 }}>{payload[0].name}</p>
-      <p style={{ color: '#FFD700' }}>Vendas: {formatBRL(payload[0].value)}</p>
+    <div className="rounded-xl p-5 shadow-sm flex flex-col gap-3"
+      style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+      <div className="flex items-center gap-2">
+        <span style={{ color: accentColor }}>{icon}</span>
+        <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#64748b' }}>
+          {title}
+        </span>
+      </div>
+
+      <div className="flex flex-wrap gap-x-4 gap-y-2">
+        <div className="min-w-0">
+          <p className="text-xs mb-0.5" style={{ color: '#94a3b8' }}>Até agora</p>
+          <p className="text-lg font-bold leading-tight truncate" style={{ color: '#0a1628' }}>{formatBRL(atual)}</p>
+        </div>
+        {isMesAtual && (
+          <div className="min-w-0">
+            <p className="text-xs mb-0.5" style={{ color: '#94a3b8' }}>Projeção do mês</p>
+            <div className="flex items-center gap-1">
+              <ArrowUpRight size={13} style={{ color: '#16a34a', flexShrink: 0 }} />
+              <p className="text-base font-bold leading-tight truncate" style={{ color: '#16a34a' }}>{formatBRL(projecao)}</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {isMesAtual && (
+        <>
+          <div className="h-1.5 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
+            <div className="h-full rounded-full transition-all"
+              style={{ width: `${Math.min(pctDU, 100)}%`, background: accentColor }} />
+          </div>
+          <p className="text-xs" style={{ color: '#94a3b8' }}>
+            {duDecorridos} de {duTotal} dias úteis &nbsp;·&nbsp; {pctDU.toFixed(0)}% do mês
+          </p>
+        </>
+      )}
     </div>
   );
 }
@@ -48,6 +99,8 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [ano, setAno] = useState(ANO_ATUAL);
   const [mes, setMes] = useState<number | null>(new Date().getMonth() + 1);
+
+  const hoje = new Date();
 
   const fetchData = async () => {
     setLoading(true);
@@ -69,20 +122,24 @@ export default function DashboardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ano, mes]);
 
-  const tendenciaGrafico = data?.tendencia_mensal.map((t) => ({
-    name: MESES[t.mes - 1],
-    Vendas: t.total_vendas,
-  })) || [];
+  const SETOR_CORES: Record<string, string> = {
+    'DISTRIBUIDORES': '#00205C',
+    'FERRAGENS':       '#1e40af',
+    'TELEVENDAS':      '#b45309',
+    'TELEVENDAS MG':   '#065f46',
+  };
 
-  const setorGrafico = data?.vendas_por_setor.slice(0, 8).map((s) => ({
-    name: s.setor?.split(' ').slice(0, 2).join(' ') || '',
-    value: s.total_vendas,
-  })) || [];
+  // Projeção (apenas mês atual)
+  const isMesAtual = mes !== null && mes === hoje.getMonth() + 1 && ano === hoje.getFullYear();
+  const duTotal = mes ? contarDiasUteis(ano, mes) : 0;
+  const duDecorridos = isMesAtual && mes ? contarDiasUteis(ano, mes, hoje.getDate()) : duTotal;
+  const pctDU = duTotal > 0 ? (duDecorridos / duTotal) * 100 : 0;
+  const ratioProjecao = duDecorridos > 0 ? duTotal / duDecorridos : 1;
 
-  const empresaGrafico = data?.vendas_por_empresa.slice(0, 8).map((e) => ({
-    name: e.empresa,
-    Vendas: e.total_vendas,
-  })) || [];
+  const fatProjecao = (data?.total_vendas_mes ?? 0) * ratioProjecao;
+  const paProjecao = (data?.total_pa_televendas ?? 0) * ratioProjecao;
+  const recProjecao = (data?.total_recebimentos_televendas ?? 0) * ratioProjecao;
+  const comProjecao = (data?.total_comissao_televendas ?? 0) * ratioProjecao;
 
   return (
     <AppShell>
@@ -139,7 +196,7 @@ export default function DashboardPage() {
         </div>
 
         {/* KPI Cards */}
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
           <KPICard
             title="Total de Vendas"
             value={data ? formatBRL(data.total_vendas) : '—'}
@@ -167,154 +224,178 @@ export default function DashboardPage() {
           />
         </div>
 
-        {/* Tendência + Setores */}
-        <div className="grid grid-cols-3 gap-4">
-          <div
-            className="col-span-2 rounded-xl p-5 shadow-sm"
-            style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}
-          >
-            <h2 className="text-sm font-semibold mb-4" style={{ color: '#00205C' }}>
-              Evolução Mensal de Vendas — {ano}
-            </h2>
+        {/* ── Projeções e Comissão (quando mês selecionado) ── */}
+        {mes && !loading && (
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <h2 className="text-sm font-bold" style={{ color: '#00205C' }}>
+                {isMesAtual ? `Projeções — ${MESES[mes - 1]} ${ano}` : `Resumo — ${MESES[mes - 1]} ${ano}`}
+              </h2>
+              {isMesAtual && (
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                  style={{ background: '#dbeafe', color: '#1e40af' }}>
+                  {duDecorridos}/{duTotal} dias úteis
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+              <ProjecaoCard
+                icon={<TrendingUp size={15} />}
+                title="Faturamento"
+                atual={data?.total_vendas_mes ?? 0}
+                projecao={fatProjecao}
+                pctDU={pctDU}
+                duDecorridos={duDecorridos}
+                duTotal={duTotal}
+                isMesAtual={isMesAtual}
+                accentColor="#00205C"
+              />
+              <ProjecaoCard
+                icon={<BarChart2 size={15} />}
+                title="Vendas PA Televendas"
+                atual={data?.total_pa_televendas ?? 0}
+                projecao={paProjecao}
+                pctDU={pctDU}
+                duDecorridos={duDecorridos}
+                duTotal={duTotal}
+                isMesAtual={isMesAtual}
+                accentColor="#1e40af"
+              />
+              <ProjecaoCard
+                icon={<Wallet size={15} />}
+                title="Recebimentos Televendas"
+                atual={data?.total_recebimentos_televendas ?? 0}
+                projecao={recProjecao}
+                pctDU={pctDU}
+                duDecorridos={duDecorridos}
+                duTotal={duTotal}
+                isMesAtual={isMesAtual}
+                accentColor="#065f46"
+              />
+              <ProjecaoCard
+                icon={<Award size={15} />}
+                title="Comissão Estimada"
+                atual={data?.total_comissao_televendas ?? 0}
+                projecao={comProjecao}
+                pctDU={pctDU}
+                duDecorridos={duDecorridos}
+                duTotal={duTotal}
+                isMesAtual={isMesAtual}
+                accentColor="#92400e"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* ── Setores + Top Vendedores ── */}
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+          {/* Vendas por Setor */}
+          <div className="rounded-xl p-5 shadow-sm flex flex-col gap-4"
+            style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold" style={{ color: '#00205C' }}>
+                Vendas por Setor
+              </h2>
+              {data && (
+                <span className="text-xs" style={{ color: '#94a3b8' }}>
+                  {formatBRL(data.vendas_por_setor.reduce((s, r) => s + r.total_vendas, 0))} total
+                </span>
+              )}
+            </div>
             {loading ? (
-              <div className="h-56 flex items-center justify-center text-sm" style={{ color: '#94a3b8' }}>
+              <div className="flex-1 flex items-center justify-center text-sm" style={{ color: '#94a3b8' }}>
                 Carregando...
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={tendenciaGrafico}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} />
-                  <YAxis
-                    tickFormatter={(v) => `R$ ${(v / 1000).toFixed(0)}k`}
-                    tick={{ fontSize: 11, fill: '#64748b' }}
-                  />
-                  <Tooltip
-                    formatter={(v) => [formatBRL(Number(v)), 'Vendas']}
-                    contentStyle={{ background: '#0a1628', border: 'none', borderRadius: 8, color: '#fff' }}
-                    labelStyle={{ color: '#ffffff' }}
-                    itemStyle={{ color: '#ffffff' }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="Vendas"
-                    stroke="#FFD700"
-                    strokeWidth={2.5}
-                    dot={{ fill: '#00205C', strokeWidth: 2, r: 4 }}
-                    activeDot={{ r: 6, fill: '#FFD700' }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-
-          <div
-            className="rounded-xl p-5 shadow-sm"
-            style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}
-          >
-            <h2 className="text-sm font-semibold mb-4" style={{ color: '#00205C' }}>
-              Vendas por Setor
-            </h2>
-            {loading ? (
-              <div className="h-56 flex items-center justify-center text-sm" style={{ color: '#94a3b8' }}>
-                Carregando...
+              <div className="flex flex-col gap-4">
+                {data?.vendas_por_setor.map((s, i) => {
+                  const totalGeral = data.vendas_por_setor.reduce((acc, r) => acc + r.total_vendas, 0);
+                  const pct = totalGeral > 0 ? (s.total_vendas / totalGeral) * 100 : 0;
+                  const cor = SETOR_CORES[s.setor] ?? '#94a3b8';
+                  return (
+                    <div key={i}>
+                      <div className="flex items-baseline justify-between mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0"
+                            style={{ background: cor }} />
+                          <span className="text-xs font-semibold" style={{ color: '#0a1628' }}>
+                            {s.setor}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold" style={{ color: cor }}>
+                            {formatBRL(s.total_vendas)}
+                          </span>
+                          <span className="text-xs w-9 text-right tabular-nums" style={{ color: '#94a3b8' }}>
+                            {pct.toFixed(1)}%
+                          </span>
+                        </div>
+                      </div>
+                      <div className="h-2 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
+                        <div className="h-full rounded-full"
+                          style={{ width: `${pct}%`, background: cor }} />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={220}>
-                <PieChart>
-                  <Pie data={setorGrafico} cx="50%" cy="45%" outerRadius={70} dataKey="value" nameKey="name">
-                    {setorGrafico.map((_, index) => (
-                      <Cell key={index} fill={CORES_GRAFICO[index % CORES_GRAFICO.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip content={<TooltipPie />} />
-                  <Legend iconSize={8} wrapperStyle={{ fontSize: 10, color: '#64748b' }} />
-                </PieChart>
-              </ResponsiveContainer>
             )}
           </div>
-        </div>
 
-        {/* Empresas + Top Vendedores */}
-        <div className="grid grid-cols-2 gap-4">
-          <div
-            className="rounded-xl p-5 shadow-sm"
-            style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}
-          >
-            <h2 className="text-sm font-semibold mb-4" style={{ color: '#00205C' }}>
-              Vendas por Empresa — {ano}
-            </h2>
+          {/* Top Vendedores */}
+          <div className="col-span-2 rounded-xl p-5 shadow-sm"
+            style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold" style={{ color: '#00205C' }}>
+                Top 10 Vendedores
+              </h2>
+              <span className="text-xs px-2 py-0.5 rounded-full"
+                style={{ background: '#f1f5f9', color: '#64748b' }}>
+                {mes ? MESES[mes - 1] + ' ' + ano : `Ano ${ano}`}
+              </span>
+            </div>
             {loading ? (
               <div className="h-48 flex items-center justify-center text-sm" style={{ color: '#94a3b8' }}>
                 Carregando...
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={empresaGrafico} layout="vertical" margin={{ right: 110 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
-                  <XAxis
-                    type="number"
-                    tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
-                    tick={{ fontSize: 10, fill: '#64748b' }}
-                  />
-                  <YAxis
-                    type="category"
-                    dataKey="name"
-                    tick={{ fontSize: 10, fill: '#64748b' }}
-                    width={80}
-                  />
-                  <Tooltip
-                    formatter={(v) => [formatBRL(Number(v)), 'Vendas']}
-                    contentStyle={{ background: '#0a1628', border: 'none', borderRadius: 8, color: '#fff' }}
-                    labelStyle={{ color: '#ffffff' }}
-                    itemStyle={{ color: '#ffffff' }}
-                  />
-                  <Bar dataKey="Vendas" fill="#00205C" radius={[0, 4, 4, 0]}>
-                    <LabelList dataKey="Vendas" position="right" formatter={(v: number) => formatBRL(v)} style={{ fontSize: 10, fill: '#64748b' }} />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-
-          <div
-            className="rounded-xl p-5 shadow-sm"
-            style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}
-          >
-            <h2 className="text-sm font-semibold mb-4" style={{ color: '#00205C' }}>
-              Top 10 Vendedores
-            </h2>
-            {loading ? (
-              <div className="h-48 flex items-center justify-center text-sm" style={{ color: '#94a3b8' }}>
-                Carregando...
-              </div>
-            ) : (
-              <div className="space-y-2 overflow-y-auto max-h-48 pr-2">
+              <div className="space-y-3">
                 {data?.top_vendedores.map((v, i) => {
                   const pct = data.top_vendedores[0]
                     ? (v.total_vendas / data.top_vendedores[0].total_vendas) * 100
                     : 0;
+                  const isTop = i === 0;
                   return (
                     <div key={i} className="flex items-center gap-3">
                       <span
-                        className="text-xs font-bold w-5 text-center shrink-0"
-                        style={{ color: i === 0 ? '#FFD700' : '#94a3b8' }}
+                        className="text-xs font-bold w-5 text-center shrink-0 rounded-full flex items-center justify-center"
+                        style={{
+                          width: 22, height: 22,
+                          background: isTop ? '#FFD700' : '#f1f5f9',
+                          color: isTop ? '#00205C' : '#94a3b8',
+                          fontSize: 11,
+                        }}
                       >
                         {i + 1}
                       </span>
                       <div className="flex-1 min-w-0">
-                        <div className="flex justify-between items-baseline mb-0.5">
-                          <p className="text-xs font-medium truncate" style={{ color: '#0a1628', maxWidth: 160 }}>
+                        <div className="flex justify-between items-baseline mb-1">
+                          <p className="text-xs font-semibold truncate"
+                            style={{ color: isTop ? '#00205C' : '#0a1628', maxWidth: 240 }}>
                             {v.vendedor}
                           </p>
-                          <p className="text-xs font-semibold shrink-0 ml-2" style={{ color: '#00205C' }}>
+                          <p className="text-xs font-bold shrink-0 ml-3"
+                            style={{ color: isTop ? '#00205C' : '#334155' }}>
                             {formatBRL(v.total_vendas)}
                           </p>
                         </div>
                         <div className="h-1.5 rounded-full overflow-hidden" style={{ background: '#f1f5f9' }}>
                           <div
                             className="h-full rounded-full"
-                            style={{ width: `${pct}%`, background: i === 0 ? '#FFD700' : '#00205C' }}
+                            style={{
+                              width: `${pct}%`,
+                              background: isTop ? '#FFD700' : i < 3 ? '#00205C' : '#94a3b8',
+                            }}
                           />
                         </div>
                       </div>

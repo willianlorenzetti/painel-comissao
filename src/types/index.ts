@@ -72,4 +72,7 @@ export interface DashboardSummary {
   vendas_por_setor: ResumoSetor[];
   vendas_por_empresa: ResumoEmpresa[];
   tendencia_mensal: TendenciaMensal[];
+  total_pa_televendas: number;
+  total_recebimentos_televendas: number;
+  total_comissao_televendas: number;
 }

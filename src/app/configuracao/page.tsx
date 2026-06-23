@@ -50,7 +50,7 @@ function PctInput({ value, onChange, className, style, placeholder }: {
 }
 import AppShell from '@/components/layout/AppShell';
 import { MESES } from '@/lib/format';
-import { Save, CheckCircle, AlertCircle, Calendar } from 'lucide-react';
+import { Save, CheckCircle, AlertCircle, Calendar, Users, Loader2 } from 'lucide-react';
 import { useUser } from '@/components/providers/UserProvider';
 import { useRouter } from 'next/navigation';
 
@@ -91,7 +91,13 @@ const BONUS_CORES = [
 export default function ConfiguracaoPage() {
   const usuario = useUser();
   const router = useRouter();
-  const [aba, setAba] = useState<'metas' | 'bonus'>('metas');
+  const [aba, setAba] = useState<'metas' | 'bonus' | 'vendedores'>('metas');
+
+  // ── Vendedores ativo/inativo ──
+  const [vendedoresComStatus, setVendedoresComStatus] = useState<{ nome: string; ativo: boolean }[]>([]);
+  const [buscaAtivo, setBuscaAtivo] = useState('');
+  const [loadingVendAtivo, setLoadingVendAtivo] = useState(false);
+  const [togglingVend, setTogglingVend] = useState<Record<string, boolean>>({});
 
   // ── Metas PA ──
   const [allVendedores, setAllVendedores] = useState<string[]>([]);
@@ -127,6 +133,12 @@ export default function ConfiguracaoPage() {
       .then((r) => r.json())
       .then((b) => setBonusEdit(b))
       .catch(() => {});
+    setLoadingVendAtivo(true);
+    fetch('/api/vendedor-ativo')
+      .then((r) => r.json())
+      .then((data) => setVendedoresComStatus(Array.isArray(data) ? data : []))
+      .catch(() => {})
+      .finally(() => setLoadingVendAtivo(false));
   }, [usuario]);
 
   useEffect(() => {
@@ -156,6 +168,35 @@ export default function ConfiguracaoPage() {
   const updateBonus = (field: keyof BonusConfig, value: number) => {
     setSavedBonus(false);
     setBonusEdit((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const toggleVendedorAtivo = async (nome: string, novoAtivo: boolean) => {
+    setVendedoresComStatus((prev) => prev.map((v) => v.nome === nome ? { ...v, ativo: novoAtivo } : v));
+    // Sincroniza com a aba Metas PA imediatamente
+    if (!novoAtivo) {
+      setAllVendedores((prev) => prev.filter((v) => v !== nome));
+    } else {
+      setAllVendedores((prev) => [...prev, nome].sort());
+    }
+    setTogglingVend((prev) => ({ ...prev, [nome]: true }));
+    try {
+      const res = await fetch('/api/vendedor-ativo', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nome_vendedor: nome, ativo: novoAtivo }),
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setVendedoresComStatus((prev) => prev.map((v) => v.nome === nome ? { ...v, ativo: !novoAtivo } : v));
+      // Reverte a sincronização
+      if (!novoAtivo) {
+        setAllVendedores((prev) => [...prev, nome].sort());
+      } else {
+        setAllVendedores((prev) => prev.filter((v) => v !== nome));
+      }
+    } finally {
+      setTogglingVend((prev) => { const n = { ...prev }; delete n[nome]; return n; });
+    }
   };
 
   const carregarMetasMensais = async (ano: number, mes: number) => {
@@ -232,6 +273,7 @@ export default function ConfiguracaoPage() {
           {([
             { key: 'metas', label: 'Metas PA' },
             { key: 'bonus', label: 'Bônus Televendas' },
+            { key: 'vendedores', label: 'Vendedores' },
           ] as const).map((tab) => (
             <button
               key={tab.key}
@@ -298,8 +340,19 @@ export default function ConfiguracaoPage() {
             {loading ? (
               <div className="text-center py-12" style={{ color: '#94a3b8' }}>Carregando...</div>
             ) : (
-              <div className="rounded-xl shadow-sm overflow-hidden"
+              <div className="relative rounded-xl shadow-sm overflow-hidden"
                 style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+
+                {savingMensais && (
+                  <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl"
+                    style={{ background: 'rgba(255,255,255,0.65)', backdropFilter: 'blur(3px)' }}>
+                    <div className="flex items-center gap-3 px-6 py-3 rounded-xl shadow-lg"
+                      style={{ background: '#00205C', color: '#FFD700' }}>
+                      <Loader2 size={18} className="animate-spin" />
+                      <span className="text-sm font-semibold">Salvando metas...</span>
+                    </div>
+                  </div>
+                )}
 
                 {/* Toolbar */}
                 <div className="flex items-center justify-between px-5 py-4 gap-3 flex-wrap"
@@ -326,12 +379,17 @@ export default function ConfiguracaoPage() {
                       disabled={savingMensais}
                       className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-all"
                       style={{
-                        background: savedMensais ? '#16a34a' : '#FFD700',
-                        color: savedMensais ? '#ffffff' : '#00205C',
-                        opacity: savingMensais ? 0.7 : 1,
+                        background: savingMensais ? '#e2e8f0' : savedMensais ? '#16a34a' : '#FFD700',
+                        color: savingMensais ? '#64748b' : savedMensais ? '#ffffff' : '#00205C',
                       }}
                     >
-                      {savedMensais ? <><CheckCircle size={15} /> Salvo!</> : <><Save size={15} /> Salvar</>}
+                      {savingMensais ? (
+                        <><Loader2 size={15} className="animate-spin" /> Salvando...</>
+                      ) : savedMensais ? (
+                        <><CheckCircle size={15} /> Salvo!</>
+                      ) : (
+                        <><Save size={15} /> Salvar</>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -442,8 +500,19 @@ export default function ConfiguracaoPage() {
               </p>
             </div>
 
-            <div className="rounded-xl shadow-sm overflow-hidden"
+            <div className="relative rounded-xl shadow-sm overflow-hidden"
               style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+
+              {savingBonus && (
+                <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl"
+                  style={{ background: 'rgba(255,255,255,0.65)', backdropFilter: 'blur(3px)' }}>
+                  <div className="flex items-center gap-3 px-6 py-3 rounded-xl shadow-lg"
+                    style={{ background: '#00205C', color: '#FFD700' }}>
+                    <Loader2 size={18} className="animate-spin" />
+                    <span className="text-sm font-semibold">Salvando bônus...</span>
+                  </div>
+                </div>
+              )}
 
               <div className="flex items-center justify-between px-5 py-4"
                 style={{ borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
@@ -455,12 +524,17 @@ export default function ConfiguracaoPage() {
                   disabled={savingBonus}
                   className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-all"
                   style={{
-                    background: savedBonus ? '#16a34a' : '#FFD700',
-                    color: savedBonus ? '#ffffff' : '#00205C',
-                    opacity: savingBonus ? 0.7 : 1,
+                    background: savingBonus ? '#e2e8f0' : savedBonus ? '#16a34a' : '#FFD700',
+                    color: savingBonus ? '#64748b' : savedBonus ? '#ffffff' : '#00205C',
                   }}
                 >
-                  {savedBonus ? <><CheckCircle size={15} /> Salvo!</> : <><Save size={15} /> Salvar Bônus</>}
+                  {savingBonus ? (
+                    <><Loader2 size={15} className="animate-spin" /> Salvando...</>
+                  ) : savedBonus ? (
+                    <><CheckCircle size={15} /> Salvo!</>
+                  ) : (
+                    <><Save size={15} /> Salvar Bônus</>
+                  )}
                 </button>
               </div>
 
@@ -519,6 +593,97 @@ export default function ConfiguracaoPage() {
                 </div>
               </div>
             </div>
+          </div>
+        )}
+        {/* ══════════════════════════════
+            ABA: VENDEDORES
+        ══════════════════════════════ */}
+        {aba === 'vendedores' && (
+          <div className="rounded-xl shadow-sm overflow-hidden"
+            style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+
+            {/* Toolbar */}
+            <div className="flex items-center justify-between px-5 py-4 gap-3 flex-wrap"
+              style={{ borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+              <div className="flex items-center gap-2">
+                <Users size={16} style={{ color: '#00205C' }} />
+                <span className="text-sm font-semibold" style={{ color: '#00205C' }}>
+                  Visibilidade dos vendedores no painel
+                </span>
+                {vendedoresComStatus.length > 0 && (
+                  <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                    style={{ background: '#d1fae5', color: '#065f46' }}>
+                    {vendedoresComStatus.filter((v) => v.ativo).length} ativos de {vendedoresComStatus.length}
+                  </span>
+                )}
+              </div>
+              <input
+                type="text"
+                value={buscaAtivo}
+                onChange={(e) => setBuscaAtivo(e.target.value)}
+                placeholder="Buscar vendedor..."
+                className="rounded-lg px-3 py-1.5 text-sm outline-none"
+                style={{ border: '1px solid #e2e8f0', color: '#0a1628', width: 200 }}
+              />
+            </div>
+
+            {loadingVendAtivo ? (
+              <div className="text-center py-12" style={{ color: '#94a3b8' }}>Carregando...</div>
+            ) : (
+              <div className="divide-y" style={{ borderColor: '#f1f5f9' }}>
+                {vendedoresComStatus
+                  .filter((v) => !buscaAtivo || v.nome.toLowerCase().includes(buscaAtivo.toLowerCase()))
+                  .map((v) => (
+                    <div key={v.nome}
+                      className="flex items-center justify-between px-5 py-3"
+                      style={{ opacity: togglingVend[v.nome] ? 0.5 : 1 }}
+                      onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = '#f8fafc')}
+                      onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = '')}>
+
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-sm font-medium" style={{ color: v.ativo ? '#0a1628' : '#94a3b8' }}>
+                          {v.nome}
+                        </span>
+                        {!v.ativo && (
+                          <span className="text-xs px-1.5 py-0.5 rounded-full"
+                            style={{ background: '#fee2e2', color: '#991b1b' }}>
+                            inativo
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Toggle switch */}
+                      <button
+                        onClick={() => toggleVendedorAtivo(v.nome, !v.ativo)}
+                        disabled={!!togglingVend[v.nome]}
+                        title={v.ativo ? 'Clique para inativar' : 'Clique para ativar'}
+                        className="relative inline-flex items-center rounded-full transition-colors duration-200 cursor-pointer focus:outline-none"
+                        style={{
+                          width: 40,
+                          height: 22,
+                          background: v.ativo ? '#16a34a' : '#cbd5e1',
+                          flexShrink: 0,
+                        }}
+                      >
+                        <span
+                          className="inline-block rounded-full bg-white shadow transition-transform duration-200"
+                          style={{
+                            width: 16,
+                            height: 16,
+                            transform: v.ativo ? 'translateX(20px)' : 'translateX(3px)',
+                          }}
+                        />
+                      </button>
+                    </div>
+                  ))}
+
+                {vendedoresComStatus.filter((v) => !buscaAtivo || v.nome.toLowerCase().includes(buscaAtivo.toLowerCase())).length === 0 && (
+                  <div className="text-center py-10 text-sm" style={{ color: '#94a3b8' }}>
+                    Nenhum vendedor encontrado
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

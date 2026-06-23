@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getPool } from '@/lib/db';
 import { getUsuario, podeVerTudo, buildSetorFilter } from '@/lib/permissions';
 import { addSetoresGlobais } from '@/lib/setores';
+import { ensureVendedorAtivoTable } from '@/lib/vendedorAtivoTable';
+
+const FILTRAR_INATIVOS = `AND USU_NOME NOT IN (
+  SELECT nome_vendedor FROM [TI-PAINELCOMISSAO_VENDEDOR_ATIVO] WHERE ativo = 0
+)`;
 
 export async function GET(req: NextRequest) {
   const email = req.headers.get('x-user-email');
@@ -12,6 +17,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const pool = await getPool();
+    await ensureVendedorAtivoTable();
     const verTudo = podeVerTudo(usuario.cargo);
 
     if (usuario.cargo === 'VENDEDOR') {
@@ -25,7 +31,7 @@ export async function GET(req: NextRequest) {
 
     if (verTudo) {
       const rVend = pool.request();
-      const wVend = addSetoresGlobais(rVend, 'WHERE USU_NOME IS NOT NULL');
+      const wVend = addSetoresGlobais(rVend, `WHERE USU_NOME IS NOT NULL ${FILTRAR_INATIVOS}`);
 
       const rSet = pool.request();
       const wSet = addSetoresGlobais(rSet, 'WHERE RVS_NOME IS NOT NULL');
@@ -56,7 +62,7 @@ export async function GET(req: NextRequest) {
 
     // GESTOR: filtrado pelos seus setores (dentro dos setores globais)
     const rVend = pool.request();
-    let wVend = addSetoresGlobais(rVend, 'WHERE USU_NOME IS NOT NULL');
+    let wVend = addSetoresGlobais(rVend, `WHERE USU_NOME IS NOT NULL ${FILTRAR_INATIVOS}`);
     wVend = buildSetorFilter(rVend, usuario.setores, wVend);
 
     const rEmp = pool.request();
