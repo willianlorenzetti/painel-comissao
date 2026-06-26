@@ -4,6 +4,8 @@ import { getUsuario } from '@/lib/permissions';
 
 const TABELA = '[TI-PAINELCOMISSAO_BONUS_CONFIG]';
 
+let _tabelaEnsured = false;
+
 const VAZIO = {
   bonus1_valor: 0, bonus1_percentual: 0,
   bonus2_valor: 0, bonus2_percentual: 0,
@@ -13,6 +15,7 @@ const VAZIO = {
 };
 
 async function garantirTabela(pool: Awaited<ReturnType<typeof getPool>>) {
+  if (_tabelaEnsured) return;
   await pool.request().query(`
     IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'TI-PAINELCOMISSAO_BONUS_CONFIG')
     BEGIN
@@ -30,6 +33,7 @@ async function garantirTabela(pool: Awaited<ReturnType<typeof getPool>>) {
       VALUES (0,0,0,0,0,0,0,0,0,0);
     END
   `);
+  _tabelaEnsured = true;
 }
 
 export async function GET(req: NextRequest) {
@@ -50,7 +54,9 @@ export async function GET(req: NextRequest) {
         BONUS5_VALOR as bonus5_valor, BONUS5_PERCENTUAL as bonus5_percentual
       FROM ${TABELA}
     `);
-    return NextResponse.json(result.recordset[0] ?? VAZIO);
+    const res = NextResponse.json(result.recordset[0] ?? VAZIO);
+    res.headers.set('Cache-Control', 'private, max-age=60, stale-while-revalidate=120');
+    return res;
   } catch (error) {
     console.error('Erro ao buscar bonus config:', error);
     return NextResponse.json(VAZIO);

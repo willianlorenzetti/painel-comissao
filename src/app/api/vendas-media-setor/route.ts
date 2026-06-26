@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getUsuario } from '@/lib/permissions';
-import { getRecebimentos, filtrarReceb, somarReceb } from '@/lib/dados-externos';
+import { getVendas, filtrarVendas, somarVendas } from '@/lib/dados-externos';
 
 const MESES_PT = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 
@@ -11,11 +11,11 @@ export async function GET(req: NextRequest) {
   if (!usuario) return NextResponse.json({ error: 'Sem permissão' }, { status: 403 });
 
   const params = req.nextUrl.searchParams;
-  const vendedor = params.get('vendedor') || '';
+  const setor = params.get('setor') || '';
   const mes = parseInt(params.get('mes') || '0');
   const ano = parseInt(params.get('ano') || '0');
 
-  if (!vendedor || !mes || !ano) {
+  if (!setor || !mes || !ano) {
     return NextResponse.json({ error: 'Parâmetros inválidos' }, { status: 400 });
   }
 
@@ -29,24 +29,26 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    // Carrega todos os anos necessários (pode ser até 2 anos diferentes)
     const anosNecessarios = [...new Set(periodos.map(p => p.ano))];
-    const recebPorAno = await Promise.all(
-      anosNecessarios.map(a2 => getRecebimentos(a2))
-    );
-    const todosReceb = recebPorAno.flat();
+    const vendasPorAno = await Promise.all(anosNecessarios.map(a2 => getVendas(a2)));
+    const todasVendas = vendasPorAno.flat();
 
     const resultados = periodos.map(({ ano: a2, mes: m2 }) => {
-      const inicio = `${a2}-${String(m2).padStart(2, '0')}-01`;
       const ultimoDia = new Date(a2, m2, 0).getDate();
+      const inicio = `${a2}-${String(m2).padStart(2, '0')}-01`;
       const fim = `${a2}-${String(m2).padStart(2, '0')}-${String(ultimoDia).padStart(2, '0')}`;
 
-      const rows = filtrarReceb(todosReceb, { inicio, fim, vendedor });
+      const rows = filtrarVendas(todasVendas, {
+        inicio, fim,
+        setores: [setor.toUpperCase()],
+        userSetores: [],
+      });
+
       return {
         ano: a2,
         mes: m2,
         label: `${MESES_PT[m2 - 1]}/${String(a2).slice(2)}`,
-        total: somarReceb(rows),
+        total: somarVendas(rows),
       };
     });
 
@@ -57,7 +59,7 @@ export async function GET(req: NextRequest) {
       meses: resultados,
     });
   } catch (err) {
-    console.error('[recebimentos-media]', err);
-    return NextResponse.json({ error: 'Erro ao consultar banco' }, { status: 500 });
+    console.error('[vendas-media-setor]', err);
+    return NextResponse.json({ error: 'Erro ao consultar dados' }, { status: 500 });
   }
 }

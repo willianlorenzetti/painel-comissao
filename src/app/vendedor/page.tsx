@@ -7,6 +7,7 @@ import { formatBRL, formatNumber, MESES } from '@/lib/format';
 import { DollarSign, TrendingUp, ChevronDown, Search, User } from 'lucide-react';
 import { useUser } from '@/components/providers/UserProvider';
 import { calcularComissaoTelevendas, type MetaConfig, type BonusConfig } from '@/lib/commission';
+import { calcularComissaoFerragens, type FerrMetaConfig, type FerrBonusConfig, type FerrMetaGrupoConfig, type ComissaoFerragens } from '@/lib/commission-ferragens';
 
 const ANO_ATUAL = new Date().getFullYear();
 const ANOS = [ANO_ATUAL, ANO_ATUAL - 1, ANO_ATUAL - 2];
@@ -22,6 +23,7 @@ interface VendedorData {
     percentual_sem_meta?: number;
   } | null;
   is_televendas?: boolean;
+  is_ferragens?: boolean;
   valor_pa?: number;
   valor_chave?: number;
   valor_ferragens_pa?: number;
@@ -36,6 +38,11 @@ interface VendedorData {
     bonus_tier: { label: string; valor: number; percentual: number } | null;
     comissao_bonus: number; comissao_total: number;
   } | null;
+  comissao_ferragens?: ComissaoFerragens | null;
+  ferr_meta?: FerrMetaConfig | null;
+  ferr_bonus?: FerrBonusConfig | null;
+  ferr_meta_grupo?: FerrMetaGrupoConfig | null;
+  vendas_setor_ferragens?: number;
 }
 
 interface ComissaoConfig { setor: string; percentual: number; meta_mensal: number; }
@@ -55,6 +62,7 @@ const CORES_FAIXA = [
   { bg: '#eff6ff', fill: '#3b82f6', text: '#1e40af', bar: '#dbeafe' },
   { bg: '#f0fdf4', fill: '#16a34a', text: '#065f46', bar: '#d1fae5' },
   { bg: '#fffbeb', fill: '#f59e0b', text: '#92400e', bar: '#fef3c7' },
+  { bg: '#fdf4ff', fill: '#a855f7', text: '#6b21a8', bar: '#e9d5ff' },
 ];
 
 export default function VendedorPage() {
@@ -143,6 +151,7 @@ export default function VendedorPage() {
     : [];
 
   const isTelevendas = data?.is_televendas ?? false;
+  const isFerragens = data?.is_ferragens ?? false;
   const bonusConfigData: BonusConfig | null = data?.bonus_config ?? null;
   const valorPAAtual = data?.valor_pa ?? 0;
   const recebidoAtual = data?.total_recebido ?? 0;
@@ -155,16 +164,36 @@ export default function VendedorPage() {
     percentual_sem_meta: metaIndividual.percentual_sem_meta ?? 0,
   } : null;
 
-  // Recalcula comissão televendas no frontend para garantir dados atualizados
+  // Comissão Televendas
   const ctv = isTelevendas && mes
     ? calcularComissaoTelevendas(valorPAAtual, recebidoAtual, metaConfigObj, bonusConfigData)
     : null;
 
-  const temMetaDefinida = faixas.some((f) => f.valor > 0);
+  // Ferragens — faixas de meta (4 níveis: M1, M2, M3, Desafio)
+  const ferrMeta = data?.ferr_meta ?? null;
+  const ferrBonus = data?.ferr_bonus ?? null;
+  const ferrMetaGrupo = data?.ferr_meta_grupo ?? null;
+  const ferrFaixas: { label: string; valor: number; percentual: number }[] = ferrMeta
+    ? [
+        { label: 'Meta 1', valor: ferrMeta.meta1_valor, percentual: ferrMeta.meta1_percentual },
+        { label: 'Meta 2', valor: ferrMeta.meta2_valor, percentual: ferrMeta.meta2_percentual },
+        { label: 'Meta 3', valor: ferrMeta.meta3_valor, percentual: ferrMeta.meta3_percentual },
+        { label: 'Meta Desafio', valor: ferrMeta.metadesafio_valor, percentual: ferrMeta.metadesafio_percentual },
+      ].filter(f => f.valor > 0)
+    : [];
+  const cfv = isFerragens && mes ? data?.comissao_ferragens ?? null : null;
+
+  const temMetaDefinida = isFerragens
+    ? ferrFaixas.length > 0
+    : faixas.some((f) => f.valor > 0);
+
   const compareRealizado = isTelevendas ? valorPAAtual : totalVendas;
-  const faixaAtingida = [...faixas].reverse().find((f) => f.valor > 0 && compareRealizado >= f.valor) || null;
+  const faixasExibidas = isFerragens ? ferrFaixas : faixas;
+  const faixaAtingida = [...faixasExibidas].reverse().find((f) => f.valor > 0 && compareRealizado >= f.valor) || null;
   const comissaoValor = isTelevendas
     ? (ctv?.comissao_total ?? null)
+    : isFerragens
+    ? (cfv?.comissao_total ?? null)
     : faixaAtingida ? (totalVendas * faixaAtingida.percentual) / 100 : null;
 
   // Projeção do mês — baseada em dias úteis (seg–sex)
@@ -184,14 +213,19 @@ export default function VendedorPage() {
     : null;
   const projecaoExibida = isTelevendas ? projecaoPA : projecaoVendas;
   const faixaProjetada = temProjecao
-    ? [...faixas].reverse().find((f) => f.valor > 0 && projecaoExibida >= f.valor) || null
+    ? [...faixasExibidas].reverse().find((f) => f.valor > 0 && projecaoExibida >= f.valor) || null
+    : null;
+  const projecaoFerragens = isFerragens && projecaoVendas > 0
+    ? calcularComissaoFerragens(projecaoVendas, recebidoAtual, ferrMeta, ferrBonus, data?.vendas_setor_ferragens ?? 0, ferrMetaGrupo)
     : null;
   const projecaoComissao = isTelevendas
     ? (ctvProjecao?.comissao_total ?? null)
+    : isFerragens
+    ? (projecaoFerragens?.comissao_total ?? null)
     : faixaProjetada ? (projecaoVendas * faixaProjetada.percentual) / 100 : null;
 
   return (
-    <AppShell>
+    <AppShell loading={loading}>
       <div className="p-6 space-y-6 animate-fade-in">
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
@@ -324,11 +358,11 @@ export default function VendedorPage() {
             <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: '#64748b' }}>
               Faixas de Meta
             </p>
-            {faixas.length === 0 ? (
+            {faixasExibidas.length === 0 ? (
               <p className="text-sm" style={{ color: '#94a3b8' }}>Meta não configurada</p>
             ) : (
-              <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${faixas.length}, 1fr)` }}>
-                {faixas.map((f, i) => {
+              <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${faixasExibidas.length}, 1fr)` }}>
+                {faixasExibidas.map((f, i) => {
                   const pct = f.valor > 0 ? Math.min((compareRealizado / f.valor) * 100, 100) : 0;
                   const atingida = f.valor > 0 && compareRealizado >= f.valor;
                   const cor = CORES_FAIXA[i] || CORES_FAIXA[0];
@@ -446,6 +480,111 @@ export default function VendedorPage() {
                 </p>
                 <p className="text-xs mt-1" style={{ color: '#64748b' }}>
                   Meta + Bônus
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Comissão Ferragens — bloco detalhado para FERRAGENS */}
+        {isFerragens && mes && cfv && (
+          <div className="grid grid-cols-2 gap-4">
+
+            {/* Vendas Breakdown */}
+            <div className="rounded-xl p-5 shadow-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+              <h2 className="text-sm font-bold mb-4" style={{ color: '#00205C' }}>Vendas Ferragens — {MESES[mesSel - 1]}</h2>
+              <div className="space-y-3">
+                {[
+                  { label: 'Total Vendido', valor: cfv.vendas_total, color: '#00205C', bg: '#f8fafc', bold: true },
+                  { label: 'Recebimentos', valor: cfv.recebido, color: '#92400e', bg: '#fffbeb' },
+                  { label: 'Vendas do Setor', valor: data?.vendas_setor_ferragens ?? 0, color: '#1e40af', bg: '#eff6ff' },
+                ].map((row, i) => (
+                  <div key={i} className="flex justify-between items-center py-1.5 px-3 rounded-lg text-sm"
+                    style={{ background: row.bg }}>
+                    <span style={{ color: '#64748b', fontWeight: row.bold ? 700 : 400 }}>{row.label}</span>
+                    <span style={{ color: row.color, fontWeight: row.bold ? 700 : 600 }}>{formatBRL(row.valor)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Comissão Detalhada */}
+            <div className="rounded-xl p-5 shadow-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+              <h2 className="text-sm font-bold mb-4" style={{ color: '#00205C' }}>Comissão Ferragens — {MESES[mesSel - 1]}</h2>
+
+              {/* Meta atingida */}
+              <div className="rounded-lg p-3 mb-3" style={{
+                background: cfv.meta_atingida ? '#f0fdf4' : '#fff1f2',
+                border: `1px solid ${cfv.meta_atingida ? '#bbf7d0' : '#fecdd3'}`
+              }}>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs font-semibold" style={{ color: cfv.meta_atingida ? '#065f46' : '#991b1b' }}>
+                    {cfv.meta_atingida ? `${cfv.meta_atingida.label} atingida ✓` : 'Nenhuma meta atingida'}
+                  </span>
+                  {cfv.meta_atingida && (
+                    <span className="text-xs font-bold" style={{ color: '#065f46' }}>
+                      {cfv.meta_atingida.percentual}% × recebimentos
+                    </span>
+                  )}
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span style={{ color: '#64748b' }}>Comissão meta</span>
+                  <span className="font-bold" style={{ color: cfv.meta_atingida ? '#16a34a' : '#dc2626' }}>
+                    {formatBRL(cfv.comissao_meta)}
+                  </span>
+                </div>
+                {!cfv.meta_atingida && ferrMeta && ferrMeta.percentual_sem_meta > 0 && (
+                  <p className="text-xs mt-1" style={{ color: '#94a3b8' }}>
+                    Aplicado {ferrMeta.percentual_sem_meta}% (% sem meta) sobre recebimentos
+                  </p>
+                )}
+              </div>
+
+              {/* Bônus individual */}
+              <div className="rounded-lg p-3 mb-3" style={{
+                background: cfv.comissao_bonus > 0 ? '#f0fdf4' : '#f8fafc',
+                border: `1px solid ${cfv.comissao_bonus > 0 ? '#bbf7d0' : '#e2e8f0'}`
+              }}>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs font-semibold" style={{ color: cfv.comissao_bonus > 0 ? '#065f46' : '#94a3b8' }}>
+                    {cfv.meta_atingida ? `Bônus ${cfv.meta_atingida.label}` : 'Bônus individual'}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span style={{ color: '#64748b' }}>Bônus individual</span>
+                  <span className="font-bold" style={{ color: cfv.comissao_bonus > 0 ? '#16a34a' : '#94a3b8' }}>
+                    {formatBRL(cfv.comissao_bonus)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Bônus grupo */}
+              <div className="rounded-lg p-3 mb-3" style={{
+                background: cfv.grupo_meta_atingida ? '#eff6ff' : '#f8fafc',
+                border: `1px solid ${cfv.grupo_meta_atingida ? '#bfdbfe' : '#e2e8f0'}`
+              }}>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs font-semibold" style={{ color: cfv.grupo_meta_atingida ? '#1e40af' : '#94a3b8' }}>
+                    {cfv.grupo_meta_atingida ? `${cfv.grupo_meta_atingida.label} do setor atingida ✓` : 'Meta do setor não atingida'}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span style={{ color: '#64748b' }}>Bônus grupo</span>
+                  <span className="font-bold" style={{ color: cfv.comissao_grupo > 0 ? '#1e40af' : '#94a3b8' }}>
+                    {formatBRL(cfv.comissao_grupo)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Total */}
+              <div className="rounded-lg p-4 text-center"
+                style={{ background: '#00205C', border: '1px solid #1a3a6e' }}>
+                <p className="text-xs uppercase tracking-wide mb-1" style={{ color: '#94a3b8' }}>Total Comissão</p>
+                <p className="text-2xl font-bold" style={{ color: '#FFD700' }}>
+                  {formatBRL(cfv.comissao_total)}
+                </p>
+                <p className="text-xs mt-1" style={{ color: '#64748b' }}>
+                  Meta + Bônus individual + Bônus grupo
                 </p>
               </div>
             </div>

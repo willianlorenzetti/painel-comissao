@@ -49,7 +49,7 @@ function PctInput({ value, onChange, className, style, placeholder }: {
   );
 }
 import AppShell from '@/components/layout/AppShell';
-import { MESES } from '@/lib/format';
+import { MESES, formatBRL } from '@/lib/format';
 import { Save, CheckCircle, AlertCircle, Calendar, Users, Loader2 } from 'lucide-react';
 import { useUser } from '@/components/providers/UserProvider';
 import { useRouter } from 'next/navigation';
@@ -70,6 +70,30 @@ interface BonusConfig {
   bonus5_valor: number; bonus5_percentual: number;
 }
 
+interface FerrVendedorMeta {
+  nome_vendedor: string;
+  meta1_valor: number; meta1_percentual: number;
+  meta2_valor: number; meta2_percentual: number;
+  meta3_valor: number; meta3_percentual: number;
+  metadesafio_valor: number; metadesafio_percentual: number;
+  percentual_sem_meta: number;
+}
+
+interface FerrVendedorBonus {
+  nome_vendedor: string;
+  bonus1_valor: number;
+  bonus2_valor: number;
+  bonus3_valor: number;
+  bonusdesafio_valor: number;
+}
+
+interface FerrMetaGrupo {
+  meta1_valor: number; meta1_bonus: number;
+  meta2_valor: number; meta2_bonus: number;
+  meta3_valor: number; meta3_bonus: number;
+  metadesafio_valor: number; metadesafio_bonus: number;
+}
+
 const BONUS_VAZIO: BonusConfig = {
   bonus1_valor: 0, bonus1_percentual: 0,
   bonus2_valor: 0, bonus2_percentual: 0,
@@ -88,10 +112,18 @@ const BONUS_CORES = [
   { bg: '#fff1f2', border: '#fecdd3', text: '#9f1239', label: 'Bônus 5' },
 ];
 
+const FERR_META_GRUPO_VAZIO: FerrMetaGrupo = {
+  meta1_valor: 0, meta1_bonus: 0,
+  meta2_valor: 0, meta2_bonus: 0,
+  meta3_valor: 0, meta3_bonus: 0,
+  metadesafio_valor: 0, metadesafio_bonus: 0,
+};
+
 export default function ConfiguracaoPage() {
   const usuario = useUser();
   const router = useRouter();
-  const [aba, setAba] = useState<'metas' | 'bonus' | 'vendedores'>('metas');
+  const [aba, setAba] = useState<'televendas' | 'ferragens' | 'vendedores'>('televendas');
+  const [tvAba, setTvAba] = useState<'metas' | 'bonus'>('metas');
 
   // ── Vendedores ativo/inativo ──
   const [vendedoresComStatus, setVendedoresComStatus] = useState<{ nome: string; ativo: boolean }[]>([]);
@@ -113,6 +145,23 @@ export default function ConfiguracaoPage() {
   const [bonusEdit, setBonusEdit] = useState<BonusConfig>(BONUS_VAZIO);
   const [savingBonus, setSavingBonus] = useState(false);
   const [savedBonus, setSavedBonus] = useState(false);
+
+  // ── Ferragens ──
+  const [ferrAba, setFerrAba] = useState<'metas' | 'bonus' | 'grupo'>('metas');
+  const [ferrMesConf, setFerrMesConf] = useState(new Date().getMonth() + 1);
+  const [ferrAnoConf, setFerrAnoConf] = useState(new Date().getFullYear());
+  const [ferrVendedores, setFerrVendedores] = useState<string[]>([]);
+  const [ferrMetasEdit, setFerrMetasEdit] = useState<Record<string, FerrVendedorMeta>>({});
+  const [ferrBonusEdit, setFerrBonusEdit] = useState<Record<string, FerrVendedorBonus>>({});
+  const [ferrMetaGrupoEdit, setFerrMetaGrupoEdit] = useState<FerrMetaGrupo>(FERR_META_GRUPO_VAZIO);
+  const [savingFerrMetas, setSavingFerrMetas] = useState(false);
+  const [savedFerrMetas, setSavedFerrMetas] = useState(false);
+  const [savingFerrBonus, setSavingFerrBonus] = useState(false);
+  const [savedFerrBonus, setSavedFerrBonus] = useState(false);
+  const [savingFerrGrupo, setSavingFerrGrupo] = useState(false);
+  const [savedFerrGrupo, setSavedFerrGrupo] = useState(false);
+  const [loadingFerr, setLoadingFerr] = useState(false);
+  const [ferrBuscaVend, setFerrBuscaVend] = useState('');
 
   useEffect(() => {
     if (usuario && usuario !== 'loading' && !['ADM', 'GESTOR'].includes(usuario.cargo)) {
@@ -146,6 +195,12 @@ export default function ConfiguracaoPage() {
     carregarMetasMensais(anoMeta, mesMeta);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [anoMeta, mesMeta, usuario]);
+
+  useEffect(() => {
+    if (!usuario || usuario === 'loading' || aba !== 'ferragens') return;
+    carregarDadosFerragens(ferrAnoConf, ferrMesConf);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aba, ferrAnoConf, ferrMesConf, usuario]);
 
   const getMensal = (nome: string): VendedorMeta =>
     metasMensaisEdit[nome] || {
@@ -253,26 +308,108 @@ export default function ConfiguracaoPage() {
     }
   };
 
+  const carregarDadosFerragens = async (ano: number, mes: number) => {
+    setLoadingFerr(true);
+    try {
+      const [vendRes, metasRes, bonusRes, grupoRes] = await Promise.all([
+        fetch(`/api/filtros?setor=FERRAGENS`).then(r => r.json()),
+        fetch(`/api/ferragens/metas?ano=${ano}&mes=${mes}`).then(r => r.json()),
+        fetch(`/api/ferragens/bonus?ano=${ano}&mes=${mes}`).then(r => r.json()),
+        fetch(`/api/ferragens/meta-grupo?ano=${ano}&mes=${mes}`).then(r => r.json()),
+      ]);
+      setFerrVendedores(vendRes.vendedores || []);
+      const metasMap: Record<string, FerrVendedorMeta> = {};
+      if (Array.isArray(metasRes)) metasRes.forEach((m: FerrVendedorMeta) => { metasMap[m.nome_vendedor] = m; });
+      setFerrMetasEdit(metasMap);
+      const bonusMap: Record<string, FerrVendedorBonus> = {};
+      if (Array.isArray(bonusRes)) bonusRes.forEach((b: FerrVendedorBonus) => { bonusMap[b.nome_vendedor] = b; });
+      setFerrBonusEdit(bonusMap);
+      if (grupoRes && typeof grupoRes === 'object' && !grupoRes.error) {
+        setFerrMetaGrupoEdit(grupoRes);
+      } else {
+        setFerrMetaGrupoEdit(FERR_META_GRUPO_VAZIO);
+      }
+    } catch { /* silent */ }
+    setLoadingFerr(false);
+  };
+
+  const getFerrMeta = (nome: string): FerrVendedorMeta =>
+    ferrMetasEdit[nome] || { nome_vendedor: nome, meta1_valor: 0, meta1_percentual: 0, meta2_valor: 0, meta2_percentual: 0, meta3_valor: 0, meta3_percentual: 0, metadesafio_valor: 0, metadesafio_percentual: 0, percentual_sem_meta: 0 };
+
+  const getFerrBonus = (nome: string): FerrVendedorBonus =>
+    ferrBonusEdit[nome] || { nome_vendedor: nome, bonus1_valor: 0, bonus2_valor: 0, bonus3_valor: 0, bonusdesafio_valor: 0 };
+
+  const updateFerrMeta = (nome: string, field: keyof Omit<FerrVendedorMeta, 'nome_vendedor'>, value: number) => {
+    setSavedFerrMetas(false);
+    setFerrMetasEdit(prev => ({ ...prev, [nome]: { ...getFerrMeta(nome), [field]: value } }));
+  };
+
+  const updateFerrBonus = (nome: string, field: keyof Omit<FerrVendedorBonus, 'nome_vendedor'>, value: number) => {
+    setSavedFerrBonus(false);
+    setFerrBonusEdit(prev => ({ ...prev, [nome]: { ...getFerrBonus(nome), [field]: value } }));
+  };
+
+  const updateFerrGrupo = (field: keyof FerrMetaGrupo, value: number) => {
+    setSavedFerrGrupo(false);
+    setFerrMetaGrupoEdit(prev => ({ ...prev, [field]: value }));
+  };
+
+  const salvarFerrMetas = async () => {
+    setSavingFerrMetas(true);
+    try {
+      const payload = ferrVendedores.map(v => ({ ...getFerrMeta(v), nome_vendedor: v, ano: ferrAnoConf, mes: ferrMesConf }));
+      const res = await fetch('/api/ferragens/metas', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error(await res.text());
+      setSavedFerrMetas(true);
+      setTimeout(() => setSavedFerrMetas(false), 3000);
+    } catch (err) { console.error(err); alert('Erro ao salvar metas Ferragens.'); }
+    setSavingFerrMetas(false);
+  };
+
+  const salvarFerrBonus = async () => {
+    setSavingFerrBonus(true);
+    try {
+      const payload = ferrVendedores.map(v => ({ ...getFerrBonus(v), nome_vendedor: v, ano: ferrAnoConf, mes: ferrMesConf }));
+      const res = await fetch('/api/ferragens/bonus', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error(await res.text());
+      setSavedFerrBonus(true);
+      setTimeout(() => setSavedFerrBonus(false), 3000);
+    } catch (err) { console.error(err); alert('Erro ao salvar bônus Ferragens.'); }
+    setSavingFerrBonus(false);
+  };
+
+  const salvarFerrGrupo = async () => {
+    setSavingFerrGrupo(true);
+    try {
+      const body = { ...ferrMetaGrupoEdit, ano: ferrAnoConf, mes: ferrMesConf };
+      const res = await fetch('/api/ferragens/meta-grupo', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error(await res.text());
+      setSavedFerrGrupo(true);
+      setTimeout(() => setSavedFerrGrupo(false), 3000);
+    } catch (err) { console.error(err); alert('Erro ao salvar meta grupo Ferragens.'); }
+    setSavingFerrGrupo(false);
+  };
+
   const vendedoresFiltrados = allVendedores.filter(
     (v) => !buscaVend || v.toLowerCase().includes(buscaVend.toLowerCase())
   );
 
   return (
-    <AppShell>
+    <AppShell loading={loading}>
       <div className="p-6 space-y-6 animate-fade-in">
         {/* Header */}
         <div>
           <h1 className="text-2xl font-bold" style={{ color: '#00205C' }}>Configuração</h1>
           <p className="text-sm mt-0.5" style={{ color: '#64748b' }}>
-            Metas PA mensais e bônus Televendas
+            Metas, bônus e configurações por setor
           </p>
         </div>
 
-        {/* Abas */}
+        {/* Abas principais */}
         <div className="flex items-center gap-1 rounded-xl p-1 w-fit" style={{ background: '#f1f5f9' }}>
           {([
-            { key: 'metas', label: 'Metas PA' },
-            { key: 'bonus', label: 'Bônus Televendas' },
+            { key: 'televendas', label: 'Televendas' },
+            { key: 'ferragens', label: 'Ferragens' },
             { key: 'vendedores', label: 'Vendedores' },
           ] as const).map((tab) => (
             <button
@@ -290,10 +427,25 @@ export default function ConfiguracaoPage() {
         </div>
 
         {/* ══════════════════════════════
-            ABA: METAS PA
+            ABA: TELEVENDAS
         ══════════════════════════════ */}
-        {aba === 'metas' && (
-          <>
+        {aba === 'televendas' && (
+          <div className="space-y-5">
+            {/* Sub-abas Televendas */}
+            <div className="flex items-center gap-1 rounded-xl p-1 w-fit" style={{ background: '#f1f5f9' }}>
+              {([
+                { key: 'metas', label: 'Metas PA' },
+                { key: 'bonus', label: 'Bônus' },
+              ] as const).map((sub) => (
+                <button key={sub.key} onClick={() => setTvAba(sub.key)}
+                  className="px-4 py-1.5 rounded-lg text-sm font-semibold transition-all"
+                  style={{ background: tvAba === sub.key ? '#00205C' : 'transparent', color: tvAba === sub.key ? '#FFD700' : '#64748b' }}>
+                  {sub.label}
+                </button>
+              ))}
+            </div>
+
+          {tvAba === 'metas' && (<>
             {/* Período */}
             <div className="rounded-xl p-4 flex items-center gap-5 flex-wrap"
               style={{ background: '#ffffff', border: '2px solid #00205C' }}>
@@ -481,120 +633,396 @@ export default function ConfiguracaoPage() {
                 </div>
               </div>
             )}
-          </>
-        )}
+          </>)}
 
-        {/* ══════════════════════════════
-            ABA: BÔNUS TELEVENDAS
-        ══════════════════════════════ */}
-        {aba === 'bonus' && (
-          <div className="space-y-5">
-            <div className="rounded-xl p-4 flex items-start gap-3"
-              style={{ background: '#0a1628', border: '1px solid #1a3a6e' }}>
-              <AlertCircle size={18} style={{ color: '#FFD700' }} className="shrink-0 mt-0.5" />
-              <p className="text-xs leading-relaxed" style={{ color: '#94a3b8' }}>
-                <strong className="text-white">Bônus global — Televendas / Televendas MG.</strong>{' '}
-                Este bônus vale para todas as vendedoras e todos os meses. Altere apenas quando quiser mudar as regras.
-                O bônus é <strong className="text-white">desbloqueado ao atingir a Meta PA 1</strong> e aplica-se
-                a <strong className="text-white">% da maior faixa atingida sobre o valor PA</strong> total.
-              </p>
-            </div>
-
-            <div className="relative rounded-xl shadow-sm overflow-hidden"
-              style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
-
-              {savingBonus && (
-                <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl"
-                  style={{ background: 'rgba(255,255,255,0.65)', backdropFilter: 'blur(3px)' }}>
-                  <div className="flex items-center gap-3 px-6 py-3 rounded-xl shadow-lg"
-                    style={{ background: '#00205C', color: '#FFD700' }}>
-                    <Loader2 size={18} className="animate-spin" />
-                    <span className="text-sm font-semibold">Salvando bônus...</span>
+          {tvAba === 'bonus' && (
+            <div className="space-y-5">
+              <div className="rounded-xl p-4 flex items-start gap-3"
+                style={{ background: '#0a1628', border: '1px solid #1a3a6e' }}>
+                <AlertCircle size={18} style={{ color: '#FFD700' }} className="shrink-0 mt-0.5" />
+                <p className="text-xs leading-relaxed" style={{ color: '#94a3b8' }}>
+                  <strong className="text-white">Bônus global — Televendas / Televendas MG.</strong>{' '}
+                  Este bônus vale para todas as vendedoras e todos os meses. Altere apenas quando quiser mudar as regras.
+                  O bônus é <strong className="text-white">desbloqueado ao atingir a Meta PA 1</strong> e aplica-se
+                  a <strong className="text-white">% da maior faixa atingida sobre o valor PA</strong> total.
+                </p>
+              </div>
+              <div className="relative rounded-xl shadow-sm overflow-hidden"
+                style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+                {savingBonus && (
+                  <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl"
+                    style={{ background: 'rgba(255,255,255,0.65)', backdropFilter: 'blur(3px)' }}>
+                    <div className="flex items-center gap-3 px-6 py-3 rounded-xl shadow-lg"
+                      style={{ background: '#00205C', color: '#FFD700' }}>
+                      <Loader2 size={18} className="animate-spin" />
+                      <span className="text-sm font-semibold">Salvando bônus...</span>
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-center justify-between px-5 py-4"
+                  style={{ borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                  <p className="text-sm font-bold" style={{ color: '#00205C' }}>
+                    5 faixas de bônus sobre o valor PA
+                  </p>
+                  <button onClick={salvarBonus} disabled={savingBonus}
+                    className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-all"
+                    style={{ background: savingBonus ? '#e2e8f0' : savedBonus ? '#16a34a' : '#FFD700', color: savingBonus ? '#64748b' : savedBonus ? '#ffffff' : '#00205C' }}>
+                    {savingBonus ? <><Loader2 size={15} className="animate-spin" /> Salvando...</> : savedBonus ? <><CheckCircle size={15} /> Salvo!</> : <><Save size={15} /> Salvar Bônus</>}
+                  </button>
+                </div>
+                <div className="p-6">
+                  <div className="grid grid-cols-5 gap-4">
+                    {BONUS_CORES.map((cor, i) => {
+                      const n = (i + 1) as 1|2|3|4|5;
+                      const vField = `bonus${n}_valor` as keyof BonusConfig;
+                      const pField = `bonus${n}_percentual` as keyof BonusConfig;
+                      return (
+                        <div key={n} className="rounded-xl p-4 flex flex-col gap-3"
+                          style={{ background: cor.bg, border: `1px solid ${cor.border}` }}>
+                          <p className="text-xs font-bold uppercase tracking-wide text-center"
+                            style={{ color: cor.text }}>{cor.label}</p>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs" style={{ color: '#64748b' }}>Mínimo de vendas PA</label>
+                            <div className="flex items-center gap-1 rounded-lg px-2 py-1.5 bg-white"
+                              style={{ border: '1px solid #e2e8f0' }}>
+                              <span className="text-xs shrink-0" style={{ color: '#94a3b8' }}>R$</span>
+                              <input type="number" min={0} step={1000}
+                                value={bonusEdit[vField] as number}
+                                onChange={(e) => updateBonus(vField, parseFloat(e.target.value) || 0)}
+                                className="flex-1 min-w-0 text-xs text-right outline-none font-medium bg-transparent"
+                                style={{ color: '#0a1628' }} placeholder="0" onFocus={(e) => e.target.select()} />
+                            </div>
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs" style={{ color: '#64748b' }}>% sobre valor PA</label>
+                            <div className="flex items-center gap-1 rounded-lg px-2 py-1.5 bg-white"
+                              style={{ border: '1px solid #e2e8f0' }}>
+                              <input type="number" min={0} max={100} step={0.5}
+                                value={bonusEdit[pField] as number}
+                                onChange={(e) => updateBonus(pField, parseFloat(e.target.value) || 0)}
+                                className="flex-1 min-w-0 text-sm text-center outline-none font-bold bg-transparent"
+                                style={{ color: cor.text }} placeholder="0" onFocus={(e) => e.target.select()} />
+                              <span className="text-xs shrink-0" style={{ color: '#64748b' }}>%</span>
+                            </div>
+                          </div>
+                          {(bonusEdit[vField] as number) > 0 && (bonusEdit[pField] as number) > 0 && (
+                            <p className="text-xs text-center rounded-lg py-1"
+                              style={{ background: cor.border, color: cor.text }}>
+                              A partir de R$ {((bonusEdit[vField] as number) / 1000).toFixed(0)}k → {bonusEdit[pField]}%
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
-              )}
-
-              <div className="flex items-center justify-between px-5 py-4"
-                style={{ borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
-                <p className="text-sm font-bold" style={{ color: '#00205C' }}>
-                  5 faixas de bônus sobre o valor PA
-                </p>
-                <button
-                  onClick={salvarBonus}
-                  disabled={savingBonus}
-                  className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-all"
-                  style={{
-                    background: savingBonus ? '#e2e8f0' : savedBonus ? '#16a34a' : '#FFD700',
-                    color: savingBonus ? '#64748b' : savedBonus ? '#ffffff' : '#00205C',
-                  }}
-                >
-                  {savingBonus ? (
-                    <><Loader2 size={15} className="animate-spin" /> Salvando...</>
-                  ) : savedBonus ? (
-                    <><CheckCircle size={15} /> Salvo!</>
-                  ) : (
-                    <><Save size={15} /> Salvar Bônus</>
-                  )}
-                </button>
               </div>
+            </div>
+          )}
+          </div>
+        )}
+        {/* ══════════════════════════════
+            ABA: FERRAGENS
+        ══════════════════════════════ */}
+        {aba === 'ferragens' && (
+          <div className="space-y-5">
+            {/* Sub-abas Ferragens */}
+            <div className="flex items-center gap-1 rounded-xl p-1 w-fit" style={{ background: '#f1f5f9' }}>
+              {([
+                { key: 'metas', label: 'Metas' },
+                { key: 'bonus', label: 'Bônus' },
+                { key: 'grupo', label: 'Meta Grupo' },
+              ] as const).map((sub) => (
+                <button key={sub.key} onClick={() => setFerrAba(sub.key)}
+                  className="px-4 py-1.5 rounded-lg text-sm font-semibold transition-all"
+                  style={{ background: ferrAba === sub.key ? '#00205C' : 'transparent', color: ferrAba === sub.key ? '#FFD700' : '#64748b' }}>
+                  {sub.label}
+                </button>
+              ))}
+            </div>
 
-              <div className="p-6">
-                <div className="grid grid-cols-5 gap-4">
-                  {BONUS_CORES.map((cor, i) => {
-                    const n = (i + 1) as 1|2|3|4|5;
-                    const vField = `bonus${n}_valor` as keyof BonusConfig;
-                    const pField = `bonus${n}_percentual` as keyof BonusConfig;
-                    return (
-                      <div key={n} className="rounded-xl p-4 flex flex-col gap-3"
-                        style={{ background: cor.bg, border: `1px solid ${cor.border}` }}>
-                        <p className="text-xs font-bold uppercase tracking-wide text-center"
-                          style={{ color: cor.text }}>{cor.label}</p>
-
-                        <div className="flex flex-col gap-1">
-                          <label className="text-xs" style={{ color: '#64748b' }}>Mínimo de vendas PA</label>
-                          <div className="flex items-center gap-1 rounded-lg px-2 py-1.5 bg-white"
-                            style={{ border: '1px solid #e2e8f0' }}>
-                            <span className="text-xs shrink-0" style={{ color: '#94a3b8' }}>R$</span>
-                            <input
-                              type="number" min={0} step={1000}
-                              value={bonusEdit[vField] as number}
-                              onChange={(e) => updateBonus(vField, parseFloat(e.target.value) || 0)}
-                              className="flex-1 min-w-0 text-xs text-right outline-none font-medium bg-transparent"
-                              style={{ color: '#0a1628' }}
-                              placeholder="0" onFocus={(e) => e.target.select()} />
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col gap-1">
-                          <label className="text-xs" style={{ color: '#64748b' }}>% sobre valor PA</label>
-                          <div className="flex items-center gap-1 rounded-lg px-2 py-1.5 bg-white"
-                            style={{ border: '1px solid #e2e8f0' }}>
-                            <input
-                              type="number" min={0} max={100} step={0.5}
-                              value={bonusEdit[pField] as number}
-                              onChange={(e) => updateBonus(pField, parseFloat(e.target.value) || 0)}
-                              className="flex-1 min-w-0 text-sm text-center outline-none font-bold bg-transparent"
-                              style={{ color: cor.text }}
-                              placeholder="0" onFocus={(e) => e.target.select()} />
-                            <span className="text-xs shrink-0" style={{ color: '#64748b' }}>%</span>
-                          </div>
-                        </div>
-
-                        {/* Preview */}
-                        {(bonusEdit[vField] as number) > 0 && (bonusEdit[pField] as number) > 0 && (
-                          <p className="text-xs text-center rounded-lg py-1"
-                            style={{ background: cor.border, color: cor.text }}>
-                            A partir de R$ {((bonusEdit[vField] as number) / 1000).toFixed(0)}k → {bonusEdit[pField]}%
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })}
+            {/* Período */}
+            <div className="rounded-xl p-4 flex items-center gap-5 flex-wrap"
+              style={{ background: '#ffffff', border: '2px solid #00205C' }}>
+              <div className="flex items-center gap-2 shrink-0">
+                <Calendar size={18} style={{ color: '#00205C' }} />
+                <span className="text-sm font-semibold" style={{ color: '#00205C' }}>Período de referência:</span>
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-xs font-medium uppercase tracking-wide" style={{ color: '#64748b' }}>Mês</label>
+                  <select value={ferrMesConf} onChange={(e) => setFerrMesConf(parseInt(e.target.value))}
+                    className="rounded-lg px-3 py-2 text-sm font-semibold outline-none cursor-pointer"
+                    style={{ border: '1px solid #cbd5e1', color: '#00205C', minWidth: 140 }}>
+                    {MESES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-xs font-medium uppercase tracking-wide" style={{ color: '#64748b' }}>Ano</label>
+                  <select value={ferrAnoConf} onChange={(e) => setFerrAnoConf(parseInt(e.target.value))}
+                    className="rounded-lg px-3 py-2 text-sm font-semibold outline-none cursor-pointer"
+                    style={{ border: '1px solid #cbd5e1', color: '#00205C', minWidth: 100 }}>
+                    {ANOS_META.map((a) => <option key={a} value={a}>{a}</option>)}
+                  </select>
+                </div>
+                <div className="px-3 py-1.5 rounded-lg text-sm font-bold mt-4"
+                  style={{ background: '#00205C', color: '#FFD700' }}>
+                  {MESES[ferrMesConf - 1]} {ferrAnoConf}
                 </div>
               </div>
             </div>
+
+            {loadingFerr ? (
+              <div className="text-center py-12" style={{ color: '#94a3b8' }}>Carregando...</div>
+            ) : (
+              <>
+                {/* ── METAS POR VENDEDOR ── */}
+                {ferrAba === 'metas' && (
+                  <div className="relative rounded-xl shadow-sm overflow-hidden"
+                    style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+                    <div className="flex items-center justify-between px-5 py-4 gap-3 flex-wrap"
+                      style={{ borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                      <div className="rounded-lg p-3 flex items-start gap-2 flex-1"
+                        style={{ background: '#0a1628', border: '1px solid #1a3a6e' }}>
+                        <AlertCircle size={15} style={{ color: '#FFD700' }} className="shrink-0 mt-0.5" />
+                        <p className="text-xs" style={{ color: '#94a3b8' }}>
+                          <strong className="text-white">Ferragens:</strong> comissão calculada sobre o <strong className="text-white">total vendido</strong>.
+                          Se não bater nenhuma meta, aplica-se o <strong className="text-white">% Sem Meta</strong> sobre recebimentos.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0">
+                        <input
+                          type="text"
+                          value={ferrBuscaVend}
+                          onChange={(e) => setFerrBuscaVend(e.target.value)}
+                          placeholder="Buscar vendedor..."
+                          className="rounded-lg px-3 py-1.5 text-sm outline-none"
+                          style={{ border: '1px solid #e2e8f0', color: '#0a1628', width: 200 }}
+                        />
+                        <button onClick={salvarFerrMetas} disabled={savingFerrMetas}
+                          className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-all"
+                          style={{ background: savingFerrMetas ? '#e2e8f0' : savedFerrMetas ? '#16a34a' : '#FFD700', color: savingFerrMetas ? '#64748b' : savedFerrMetas ? '#ffffff' : '#00205C' }}>
+                          {savingFerrMetas ? <><Loader2 size={15} className="animate-spin" /> Salvando...</> : savedFerrMetas ? <><CheckCircle size={15} /> Salvo!</> : <><Save size={15} /> Salvar Metas</>}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <div className="grid px-5 py-2 text-xs font-semibold uppercase tracking-wider"
+                        style={{ gridTemplateColumns: '220px repeat(4, 200px) 120px', minWidth: 1200, borderBottom: '1px solid #f1f5f9', background: '#f8fafc', color: '#64748b' }}>
+                        <span>Vendedor</span>
+                        {['Meta 1', 'Meta 2', 'Meta 3', 'Meta Desafio'].map((l, i) => (
+                          <span key={i} className="text-center px-3 py-1 rounded-full mx-2"
+                            style={{ background: ['#dbeafe','#d1fae5','#fef3c7','#e9d5ff'][i], color: ['#1e40af','#065f46','#92400e','#6b21a8'][i] }}>{l}</span>
+                        ))}
+                        <span className="text-center px-2 py-1 rounded-full" style={{ background: '#fee2e2', color: '#991b1b' }}>% Sem Meta</span>
+                      </div>
+                      <div className="divide-y" style={{ borderColor: '#f1f5f9', minWidth: 1200 }}>
+                        {ferrVendedores.filter(v => !ferrBuscaVend || v.toLowerCase().includes(ferrBuscaVend.toLowerCase())).map((v) => {
+                          const m = getFerrMeta(v);
+                          const temConf = !!ferrMetasEdit[v];
+                          return (
+                            <div key={v} className="grid items-center px-5 py-3"
+                              style={{ gridTemplateColumns: '220px repeat(4, 200px) 120px' }}
+                              onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = '#f8fafc')}
+                              onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = '')}>
+                              <div className="flex items-center gap-2 pr-3">
+                                <span className="text-sm font-medium" style={{ color: '#0a1628' }}>{v}</span>
+                                {temConf && <span className="text-xs px-1.5 py-0.5 rounded-full shrink-0" style={{ background: '#d1fae5', color: '#065f46' }}>✓</span>}
+                              </div>
+                              {([
+                                { vf: 'meta1_valor' as const, pf: 'meta1_percentual' as const, bg: '#eff6ff', border: '#bfdbfe' },
+                                { vf: 'meta2_valor' as const, pf: 'meta2_percentual' as const, bg: '#f0fdf4', border: '#bbf7d0' },
+                                { vf: 'meta3_valor' as const, pf: 'meta3_percentual' as const, bg: '#fffbeb', border: '#fde68a' },
+                                { vf: 'metadesafio_valor' as const, pf: 'metadesafio_percentual' as const, bg: '#fdf4ff', border: '#e9d5ff' },
+                              ]).map(({ vf, pf, bg, border }) => (
+                                <div key={vf} className="flex items-center gap-1 mx-2 px-2 py-1.5 rounded-lg"
+                                  style={{ background: bg, border: `1px solid ${border}` }}>
+                                  <span className="text-xs shrink-0" style={{ color: '#64748b' }}>R$</span>
+                                  <input type="number" min={0} step={1000} value={m[vf]}
+                                    onChange={(e) => updateFerrMeta(v, vf, parseFloat(e.target.value) || 0)}
+                                    className="flex-1 min-w-0 rounded px-1 py-1 text-xs text-right outline-none bg-white font-medium"
+                                    style={{ border: '1px solid #e2e8f0', color: '#0a1628' }}
+                                    placeholder="0" onFocus={(e) => e.target.select()} />
+                                  <input type="number" min={0} max={100} step={0.5} value={m[pf]}
+                                    onChange={(e) => updateFerrMeta(v, pf, parseFloat(e.target.value) || 0)}
+                                    className="w-12 rounded px-1 py-1 text-xs text-center outline-none font-bold"
+                                    style={{ border: '1px solid #e2e8f0', color: '#00205C', background: '#ffffff' }}
+                                    placeholder="0" onFocus={(e) => e.target.select()} />
+                                  <span className="text-xs shrink-0" style={{ color: '#64748b' }}>%</span>
+                                </div>
+                              ))}
+                              <div className="flex items-center gap-1 mx-2 px-2 py-1.5 rounded-lg"
+                                style={{ background: '#fff1f2', border: '1px solid #fecdd3' }}>
+                                <PctInput value={m.percentual_sem_meta}
+                                  onChange={(val) => updateFerrMeta(v, 'percentual_sem_meta', val)}
+                                  className="flex-1 min-w-0 rounded px-1.5 py-1 text-xs text-center outline-none font-bold"
+                                  style={{ border: '1px solid #e2e8f0', color: '#991b1b', background: '#ffffff' }}
+                                  placeholder="0" />
+                                <span className="text-xs shrink-0" style={{ color: '#64748b' }}>%</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {ferrVendedores.length === 0 && (
+                          <div className="text-center py-10 text-sm" style={{ color: '#94a3b8' }}>
+                            Nenhuma vendedora Ferragens encontrada
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── BÔNUS POR VENDEDOR ── */}
+                {ferrAba === 'bonus' && (
+                  <div className="relative rounded-xl shadow-sm overflow-hidden"
+                    style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+                    <div className="flex items-center justify-between px-5 py-4 gap-3 flex-wrap"
+                      style={{ borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                      <p className="text-sm font-bold" style={{ color: '#00205C' }}>
+                        Bônus individual por faixa de meta — valor fixo em R$
+                      </p>
+                      <div className="flex items-center gap-3 shrink-0">
+                        <input
+                          type="text"
+                          value={ferrBuscaVend}
+                          onChange={(e) => setFerrBuscaVend(e.target.value)}
+                          placeholder="Buscar vendedor..."
+                          className="rounded-lg px-3 py-1.5 text-sm outline-none"
+                          style={{ border: '1px solid #e2e8f0', color: '#0a1628', width: 200 }}
+                        />
+                        <button onClick={salvarFerrBonus} disabled={savingFerrBonus}
+                          className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-all"
+                          style={{ background: savingFerrBonus ? '#e2e8f0' : savedFerrBonus ? '#16a34a' : '#FFD700', color: savingFerrBonus ? '#64748b' : savedFerrBonus ? '#ffffff' : '#00205C' }}>
+                          {savingFerrBonus ? <><Loader2 size={15} className="animate-spin" /> Salvando...</> : savedFerrBonus ? <><CheckCircle size={15} /> Salvo!</> : <><Save size={15} /> Salvar Bônus</>}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <div className="grid px-5 py-2 text-xs font-semibold uppercase tracking-wider"
+                        style={{ gridTemplateColumns: '220px repeat(4, 160px)', minWidth: 860, borderBottom: '1px solid #f1f5f9', background: '#f8fafc', color: '#64748b' }}>
+                        <span>Vendedor</span>
+                        {['Bônus 1', 'Bônus 2', 'Bônus 3', 'Bônus Desafio'].map((l, i) => (
+                          <span key={i} className="text-center px-3 py-1 rounded-full mx-2"
+                            style={{ background: ['#dbeafe','#d1fae5','#fef3c7','#e9d5ff'][i], color: ['#1e40af','#065f46','#92400e','#6b21a8'][i] }}>{l}</span>
+                        ))}
+                      </div>
+                      <div className="divide-y" style={{ borderColor: '#f1f5f9', minWidth: 860 }}>
+                        {ferrVendedores.filter(v => !ferrBuscaVend || v.toLowerCase().includes(ferrBuscaVend.toLowerCase())).map((v) => {
+                          const b = getFerrBonus(v);
+                          return (
+                            <div key={v} className="grid items-center px-5 py-3"
+                              style={{ gridTemplateColumns: '220px repeat(4, 160px)' }}
+                              onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = '#f8fafc')}
+                              onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = '')}>
+                              <span className="text-sm font-medium pr-3" style={{ color: '#0a1628' }}>{v}</span>
+                              {([
+                                { f: 'bonus1_valor' as const, bg: '#eff6ff', border: '#bfdbfe' },
+                                { f: 'bonus2_valor' as const, bg: '#f0fdf4', border: '#bbf7d0' },
+                                { f: 'bonus3_valor' as const, bg: '#fffbeb', border: '#fde68a' },
+                                { f: 'bonusdesafio_valor' as const, bg: '#fdf4ff', border: '#e9d5ff' },
+                              ]).map(({ f, bg, border }) => (
+                                <div key={f} className="flex items-center gap-1 mx-2 px-2 py-1.5 rounded-lg"
+                                  style={{ background: bg, border: `1px solid ${border}` }}>
+                                  <span className="text-xs shrink-0" style={{ color: '#64748b' }}>R$</span>
+                                  <input type="number" min={0} step={100} value={b[f]}
+                                    onChange={(e) => updateFerrBonus(v, f, parseFloat(e.target.value) || 0)}
+                                    className="flex-1 min-w-0 rounded px-1 py-1 text-xs text-right outline-none bg-white font-medium"
+                                    style={{ border: '1px solid #e2e8f0', color: '#0a1628' }}
+                                    placeholder="0" onFocus={(e) => e.target.select()} />
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })}
+                        {ferrVendedores.length === 0 && (
+                          <div className="text-center py-10 text-sm" style={{ color: '#94a3b8' }}>
+                            Nenhuma vendedora Ferragens encontrada
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── META GRUPO (SETOR) ── */}
+                {ferrAba === 'grupo' && (
+                  <div className="space-y-4">
+                    <div className="rounded-xl p-4 flex items-start gap-3"
+                      style={{ background: '#0a1628', border: '1px solid #1a3a6e' }}>
+                      <AlertCircle size={18} style={{ color: '#FFD700' }} className="shrink-0 mt-0.5" />
+                      <p className="text-xs leading-relaxed" style={{ color: '#94a3b8' }}>
+                        <strong className="text-white">Meta do Setor (Grupo) — Ferragens.</strong>{' '}
+                        Define o total de vendas que o setor precisa atingir para liberar o bônus grupo.
+                        O bônus grupo só é adicionado para vendedoras que atingiram ao menos a Meta 1 individual.
+                      </p>
+                    </div>
+
+                    <div className="rounded-xl shadow-sm overflow-hidden"
+                      style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+                      <div className="flex items-center justify-between px-5 py-4"
+                        style={{ borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                        <p className="text-sm font-bold" style={{ color: '#00205C' }}>
+                          4 faixas de meta do setor — valor total vendido pelo setor
+                        </p>
+                        <button onClick={salvarFerrGrupo} disabled={savingFerrGrupo}
+                          className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-all"
+                          style={{ background: savingFerrGrupo ? '#e2e8f0' : savedFerrGrupo ? '#16a34a' : '#FFD700', color: savingFerrGrupo ? '#64748b' : savedFerrGrupo ? '#ffffff' : '#00205C' }}>
+                          {savingFerrGrupo ? <><Loader2 size={15} className="animate-spin" /> Salvando...</> : savedFerrGrupo ? <><CheckCircle size={15} /> Salvo!</> : <><Save size={15} /> Salvar Meta Grupo</>}
+                        </button>
+                      </div>
+
+                      <div className="p-6">
+                        <div className="grid grid-cols-4 gap-4">
+                          {([
+                            { label: 'Meta 1', vf: 'meta1_valor' as const, bf: 'meta1_bonus' as const, bg: '#eff6ff', border: '#bfdbfe', text: '#1e40af' },
+                            { label: 'Meta 2', vf: 'meta2_valor' as const, bf: 'meta2_bonus' as const, bg: '#f0fdf4', border: '#bbf7d0', text: '#065f46' },
+                            { label: 'Meta 3', vf: 'meta3_valor' as const, bf: 'meta3_bonus' as const, bg: '#fffbeb', border: '#fde68a', text: '#92400e' },
+                            { label: 'Meta Desafio', vf: 'metadesafio_valor' as const, bf: 'metadesafio_bonus' as const, bg: '#fdf4ff', border: '#e9d5ff', text: '#6b21a8' },
+                          ]).map(({ label, vf, bf, bg, border, text }) => (
+                            <div key={label} className="rounded-xl p-4 flex flex-col gap-3"
+                              style={{ background: bg, border: `1px solid ${border}` }}>
+                              <p className="text-xs font-bold uppercase tracking-wide text-center" style={{ color: text }}>{label}</p>
+                              <div className="flex flex-col gap-1">
+                                <label className="text-xs" style={{ color: '#64748b' }}>Total do setor mínimo</label>
+                                <div className="flex items-center gap-1 rounded-lg px-2 py-1.5 bg-white"
+                                  style={{ border: '1px solid #e2e8f0' }}>
+                                  <span className="text-xs shrink-0" style={{ color: '#94a3b8' }}>R$</span>
+                                  <input type="number" min={0} step={5000} value={ferrMetaGrupoEdit[vf]}
+                                    onChange={(e) => updateFerrGrupo(vf, parseFloat(e.target.value) || 0)}
+                                    className="flex-1 min-w-0 text-xs text-right outline-none font-medium bg-transparent"
+                                    style={{ color: '#0a1628' }} placeholder="0" onFocus={(e) => e.target.select()} />
+                                </div>
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <label className="text-xs" style={{ color: '#64748b' }}>Bônus grupo (R$)</label>
+                                <div className="flex items-center gap-1 rounded-lg px-2 py-1.5 bg-white"
+                                  style={{ border: '1px solid #e2e8f0' }}>
+                                  <span className="text-xs shrink-0" style={{ color: '#94a3b8' }}>R$</span>
+                                  <input type="number" min={0} step={100} value={ferrMetaGrupoEdit[bf]}
+                                    onChange={(e) => updateFerrGrupo(bf, parseFloat(e.target.value) || 0)}
+                                    className="flex-1 min-w-0 text-xs text-right outline-none font-medium bg-transparent"
+                                    style={{ color: '#0a1628' }} placeholder="0" onFocus={(e) => e.target.select()} />
+                                </div>
+                              </div>
+                              {ferrMetaGrupoEdit[vf] > 0 && (
+                                <p className="text-xs text-center rounded-lg py-1"
+                                  style={{ background: border, color: text }}>
+                                  A partir de {formatBRL(ferrMetaGrupoEdit[vf])} → +{formatBRL(ferrMetaGrupoEdit[bf])}
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
+
         {/* ══════════════════════════════
             ABA: VENDEDORES
         ══════════════════════════════ */}

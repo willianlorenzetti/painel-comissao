@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import AppShell from '@/components/layout/AppShell';
 import { formatBRL, MESES } from '@/lib/format';
 import {
@@ -9,6 +9,13 @@ import {
   type BonusConfig,
   type ComissaoTelevendas,
 } from '@/lib/commission';
+import {
+  calcularComissaoFerragens,
+  type FerrMetaConfig,
+  type FerrBonusConfig,
+  type FerrMetaGrupoConfig,
+  type ComissaoFerragens,
+} from '@/lib/commission-ferragens';
 import { useUser } from '@/components/providers/UserProvider';
 import { ChevronDown, Calculator, TrendingUp, Award, DollarSign, Clock } from 'lucide-react';
 
@@ -111,6 +118,155 @@ function calcularPAOtimo(
   return buildResult(Math.max(meta.threshold, tier.valor, remaining / (tier.pct / 100)));
 }
 
+// ─── Ferragens reverse calc ───────────────────────────────────────────────────
+
+interface FerrVendasOtimoResult {
+  vendasNeeded: number;
+  meta: { label: string; valor: number; percentual: number };
+  bonusVal: number;
+  commissionMeta: number;
+  commissionBonus: number;
+  commissionGrupo: number;
+  commissionTotal: number;
+  grupoNeeded: { label: string; valor: number } | null;
+}
+
+function calcularVendasOtimoFerragens(
+  desired: number,
+  avgRec: number,
+  meta: FerrMetaConfig,
+  bonus: FerrBonusConfig | null,
+  meta_grupo: FerrMetaGrupoConfig | null,
+): FerrVendasOtimoResult | null {
+  if (desired <= 0 || avgRec < 0) return null;
+
+  const tiers = [
+    { label: 'Meta 1',       valor: meta.meta1_valor,       pct: meta.meta1_percentual,       bonus_val: bonus?.bonus1_valor ?? 0 },
+    { label: 'Meta 2',       valor: meta.meta2_valor,       pct: meta.meta2_percentual,       bonus_val: bonus?.bonus2_valor ?? 0 },
+    { label: 'Meta 3',       valor: meta.meta3_valor,       pct: meta.meta3_percentual,       bonus_val: bonus?.bonus3_valor ?? 0 },
+    { label: 'Meta Desafio', valor: meta.metadesafio_valor, pct: meta.metadesafio_percentual, bonus_val: bonus?.bonusdesafio_valor ?? 0 },
+  ].filter(t => t.valor > 0);
+
+  const grupoTiers = meta_grupo ? [
+    { label: 'Meta 1',       valor: meta_grupo.meta1_valor,       bonus: meta_grupo.meta1_bonus },
+    { label: 'Meta 2',       valor: meta_grupo.meta2_valor,       bonus: meta_grupo.meta2_bonus },
+    { label: 'Meta 3',       valor: meta_grupo.meta3_valor,       bonus: meta_grupo.meta3_bonus },
+    { label: 'Meta Desafio', valor: meta_grupo.metadesafio_valor, bonus: meta_grupo.metadesafio_bonus },
+  ].filter(g => g.valor > 0) : [];
+
+  for (const tier of tiers) {
+    const commMeta = (tier.pct / 100) * avgRec;
+
+    // Sem bônus grupo
+    const totalSemGrupo = commMeta + tier.bonus_val;
+    if (totalSemGrupo >= desired) {
+      return { vendasNeeded: tier.valor, meta: { label: tier.label, valor: tier.valor, percentual: tier.pct }, bonusVal: tier.bonus_val, commissionMeta: commMeta, commissionBonus: tier.bonus_val, commissionGrupo: 0, commissionTotal: totalSemGrupo, grupoNeeded: null };
+    }
+
+    // Com bônus grupo (menor tier que completa)
+    for (const grupo of grupoTiers) {
+      const total = commMeta + tier.bonus_val + grupo.bonus;
+      if (total >= desired) {
+        return { vendasNeeded: tier.valor, meta: { label: tier.label, valor: tier.valor, percentual: tier.pct }, bonusVal: tier.bonus_val, commissionMeta: commMeta, commissionBonus: tier.bonus_val, commissionGrupo: grupo.bonus, commissionTotal: total, grupoNeeded: { label: grupo.label, valor: grupo.valor } };
+      }
+    }
+  }
+  return null;
+}
+
+// ─── CurrencyInput ────────────────────────────────────────────────────────────
+
+function maskCurrency(raw: string): string {
+  const onlyDigitsComma = raw.replace(/[^\d,]/g, '');
+  const [intPart = '', decPart] = onlyDigitsComma.split(',');
+  const intFormatted = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return decPart !== undefined ? `${intFormatted},${decPart.slice(0, 2)}` : intFormatted;
+}
+
+function CurrencyInput({ value, onChange, placeholder, className, style }: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      value={value}
+      placeholder={placeholder ?? '0'}
+      className={className ?? 'flex-1 outline-none text-sm font-medium'}
+      style={style ?? { color: '#0a1628' }}
+      onFocus={(e) => e.target.select()}
+      onChange={(e) => onChange(maskCurrency(e.target.value))}
+    />
+  );
+}
+
+// ─── VendedorCombobox ─────────────────────────────────────────────────────────
+
+function VendedorCombobox({ value, onChange, options }: {
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+}) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const filtered = query
+    ? options.filter(v => v.toLowerCase().includes(query.toLowerCase()))
+    : options;
+
+  const displayValue = open ? query : (value || '');
+
+  return (
+    <div ref={ref} className="relative" style={{ minWidth: 220 }}>
+      <input
+        type="text"
+        value={displayValue}
+        placeholder="Selecione ou digite..."
+        onFocus={() => { setQuery(''); setOpen(true); }}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        className="rounded-lg px-3 py-2 pr-8 text-sm font-medium w-full outline-none"
+        style={{ border: '1px solid #e2e8f0', color: value && !open ? '#00205C' : '#0a1628' }}
+      />
+      <ChevronDown size={14} className="absolute right-2 top-3 pointer-events-none" style={{ color: '#64748b' }} />
+      {open && (
+        <div className="absolute z-50 mt-1 w-full rounded-lg shadow-lg overflow-y-auto"
+          style={{ background: '#ffffff', border: '1px solid #e2e8f0', maxHeight: 260 }}>
+          {filtered.length === 0 ? (
+            <div className="px-3 py-2 text-sm" style={{ color: '#94a3b8' }}>Nenhum resultado</div>
+          ) : filtered.map((v) => (
+            <div key={v}
+              onMouseDown={() => { onChange(v); setQuery(''); setOpen(false); }}
+              className="px-3 py-2 text-sm cursor-pointer"
+              style={{
+                background: v === value ? '#eff6ff' : 'transparent',
+                color: v === value ? '#1e40af' : '#0a1628',
+                fontWeight: v === value ? 600 : 400,
+              }}
+              onMouseEnter={(e) => { if (v !== value) (e.currentTarget as HTMLElement).style.background = '#f8fafc'; }}
+              onMouseLeave={(e) => { if (v !== value) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+            >
+              {v}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── component ────────────────────────────────────────────────────────────────
 
 interface MediaRec {
@@ -121,10 +277,33 @@ interface MediaRec {
 export default function SimulacaoPage() {
   const usuario = useUser();
 
+  // Setor mode
+  const [modoSetor, setModoSetor] = useState<'televendas' | 'ferragens'>('televendas');
+
+  // ── Televendas ──
   const [vendedores, setVendedores] = useState<string[]>([]);
   const [vendedor, setVendedor] = useState('');
   const [mes, setMes] = useState(new Date().getMonth() + 1);
   const [ano, setAno] = useState(ANO_ATUAL);
+
+  // ── Ferragens ──
+  const [ferrVendedores, setFerrVendedores] = useState<string[]>([]);
+  const [ferrVendedor, setFerrVendedor] = useState('');
+  const [ferrMes, setFerrMes] = useState(new Date().getMonth() + 1);
+  const [ferrAno, setFerrAno] = useState(ANO_ATUAL);
+  const [ferrMetaConf, setFerrMetaConf] = useState<FerrMetaConfig | null>(null);
+  const [ferrBonusConf, setFerrBonusConf] = useState<FerrBonusConfig | null>(null);
+  const [ferrMetaGrupoConf, setFerrMetaGrupoConf] = useState<FerrMetaGrupoConfig | null>(null);
+  const [loadingFerrConf, setLoadingFerrConf] = useState(false);
+  const [ferrTotalVendas, setFerrTotalVendas] = useState('');
+  const [ferrRecebimentos, setFerrRecebimentos] = useState('');
+  const [ferrVendasSetor, setFerrVendasSetor] = useState('');
+  const [ferrResultado, setFerrResultado] = useState<ComissaoFerragens | null>(null);
+  const [ferrMediaRec, setFerrMediaRec] = useState<MediaRec | null>(null);
+  const [ferrMediaSetor, setFerrMediaSetor] = useState<MediaRec | null>(null);
+  const [ferrModoReverso, setFerrModoReverso] = useState(false);
+  const [ferrComissaoDesejada, setFerrComissaoDesejada] = useState('');
+  const [ferrReversoCalculado, setFerrReversoCalculado] = useState(false);
 
   const [metaConfig, setMetaConfig] = useState<MetaConfig | null>(null);
   const [bonusConfig, setBonusConfig] = useState<BonusConfig | null>(null);
@@ -151,8 +330,50 @@ export default function SimulacaoPage() {
       fetch('/api/filtros')
         .then((r) => r.json())
         .then((f) => setVendedores(f.vendedores || []));
+      fetch('/api/filtros?setor=FERRAGENS')
+        .then((r) => r.json())
+        .then((f) => setFerrVendedores(f.vendedores || []));
     }
   }, [usuario]);
+
+  useEffect(() => {
+    if (!ferrVendedor) return;
+    carregarConfigFerragens();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ferrVendedor, ferrMes, ferrAno]);
+
+  const carregarConfigFerragens = async () => {
+    setLoadingFerrConf(true);
+    setFerrResultado(null);
+    setFerrReversoCalculado(false);
+    setFerrMediaRec(null);
+    setFerrMediaSetor(null);
+    try {
+      const [metasRes, bonusRes, grupoRes, mediaRes, mediaSetorRes] = await Promise.all([
+        fetch(`/api/ferragens/metas?ano=${ferrAno}&mes=${ferrMes}`).then(r => r.json()),
+        fetch(`/api/ferragens/bonus?ano=${ferrAno}&mes=${ferrMes}`).then(r => r.json()),
+        fetch(`/api/ferragens/meta-grupo?ano=${ferrAno}&mes=${ferrMes}`).then(r => r.json()),
+        fetch(`/api/recebimentos-media?vendedor=${encodeURIComponent(ferrVendedor)}&mes=${ferrMes}&ano=${ferrAno}`).then(r => r.json()),
+        fetch(`/api/vendas-media-setor?setor=FERRAGENS&mes=${ferrMes}&ano=${ferrAno}`).then(r => r.json()),
+      ]);
+      const metaVend = Array.isArray(metasRes) ? metasRes.find((m: FerrMetaConfig & { nome_vendedor: string }) => m.nome_vendedor === ferrVendedor) : null;
+      const bonusVend = Array.isArray(bonusRes) ? bonusRes.find((b: FerrBonusConfig & { nome_vendedor: string }) => b.nome_vendedor === ferrVendedor) : null;
+      setFerrMetaConf(metaVend ?? null);
+      setFerrBonusConf(bonusVend ?? null);
+      setFerrMetaGrupoConf(grupoRes && !grupoRes.error ? grupoRes : null);
+      if (!mediaRes.error) setFerrMediaRec(mediaRes);
+      if (!mediaSetorRes.error) setFerrMediaSetor(mediaSetorRes);
+    } finally {
+      setLoadingFerrConf(false);
+    }
+  };
+
+  const simularFerragens = () => {
+    const totalVendas = parseFloat(ferrTotalVendas.replace(/\./g, '').replace(',', '.')) || 0;
+    const recebimentos = parseFloat(ferrRecebimentos.replace(/\./g, '').replace(',', '.')) || 0;
+    const vendasSetor = parseFloat(ferrVendasSetor.replace(/\./g, '').replace(',', '.')) || 0;
+    setFerrResultado(calcularComissaoFerragens(totalVendas, recebimentos, ferrMetaConf, ferrBonusConf, vendasSetor, ferrMetaGrupoConf));
+  };
 
   useEffect(() => {
     if (!vendedor) return;
@@ -217,6 +438,15 @@ export default function SimulacaoPage() {
   const META_BORDER = ['#bfdbfe', '#bbf7d0', '#fde68a'];
   const META_TEXT = ['#1e40af', '#065f46', '#92400e'];
 
+  const ferrMetasVisiveis = ferrMetaConf
+    ? [
+        { label: 'Meta 1', valor: ferrMetaConf.meta1_valor, pct: ferrMetaConf.meta1_percentual },
+        { label: 'Meta 2', valor: ferrMetaConf.meta2_valor, pct: ferrMetaConf.meta2_percentual },
+        { label: 'Meta 3', valor: ferrMetaConf.meta3_valor, pct: ferrMetaConf.meta3_percentual },
+        { label: 'Meta Desafio', valor: ferrMetaConf.metadesafio_valor, pct: ferrMetaConf.metadesafio_percentual },
+      ].filter((m) => m.valor > 0)
+    : [];
+
   return (
     <AppShell>
       <div className="p-6 space-y-6 animate-fade-in">
@@ -224,25 +454,33 @@ export default function SimulacaoPage() {
         <div>
           <h1 className="text-2xl font-bold" style={{ color: '#00205C' }}>Simulação de Comissão</h1>
           <p className="text-sm mt-0.5" style={{ color: '#64748b' }}>
-            Calcule quanto vai receber ou quanto precisa vender — Televendas / Televendas MG
+            Calcule quanto vai receber com base nas metas e bônus configurados
           </p>
         </div>
 
+        {/* Setor tabs */}
+        <div className="flex items-center gap-1 rounded-xl p-1 w-fit" style={{ background: '#f1f5f9' }}>
+          {([
+            { key: 'televendas', label: 'Televendas / Televendas MG' },
+            { key: 'ferragens', label: 'Ferragens' },
+          ] as const).map((tab) => (
+            <button key={tab.key} onClick={() => setModoSetor(tab.key)}
+              className="px-5 py-2 rounded-lg text-sm font-semibold transition-all"
+              style={{ background: modoSetor === tab.key ? '#00205C' : 'transparent', color: modoSetor === tab.key ? '#FFD700' : '#64748b' }}>
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* ── TELEVENDAS ────────────────────────────────────────── */}
+        {modoSetor === 'televendas' && (<>
         {/* Filtros */}
         <div className="rounded-xl p-4 flex flex-wrap items-end gap-4"
           style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
           {isCargo !== 'VENDEDOR' && (
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium uppercase tracking-wide" style={{ color: '#64748b' }}>Vendedor</label>
-              <div className="relative">
-                <select value={vendedor} onChange={(e) => setVendedor(e.target.value)}
-                  className="appearance-none rounded-lg px-3 py-2 pr-8 text-sm font-medium cursor-pointer"
-                  style={{ border: '1px solid #e2e8f0', color: '#00205C', minWidth: 220 }}>
-                  <option value="">Selecione...</option>
-                  {vendedores.map((v) => <option key={v} value={v}>{v}</option>)}
-                </select>
-                <ChevronDown size={14} className="absolute right-2 top-3 pointer-events-none" style={{ color: '#64748b' }} />
-              </div>
+              <VendedorCombobox value={vendedor} onChange={setVendedor} options={vendedores} />
             </div>
           )}
           <div className="flex flex-col gap-1">
@@ -355,9 +593,7 @@ export default function SimulacaoPage() {
                     </label>
                     <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: '1px solid #e2e8f0' }}>
                       <span className="text-sm" style={{ color: '#94a3b8' }}>R$</span>
-                      <input type="text" value={valorPA} onChange={(e) => setValorPA(e.target.value)}
-                        placeholder="0,00" className="flex-1 outline-none text-sm font-medium"
-                        style={{ color: '#0a1628' }} onFocus={(e) => e.target.select()} />
+                      <CurrencyInput value={valorPA} onChange={setValorPA} />
                     </div>
                   </div>
                   <div className="flex flex-col gap-1.5">
@@ -376,9 +612,7 @@ export default function SimulacaoPage() {
                     </div>
                     <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: '1px solid #e2e8f0' }}>
                       <span className="text-sm" style={{ color: '#94a3b8' }}>R$</span>
-                      <input type="text" value={recebimentos} onChange={(e) => setRecebimentos(e.target.value)}
-                        placeholder="0,00" className="flex-1 outline-none text-sm font-medium"
-                        style={{ color: '#0a1628' }} onFocus={(e) => e.target.select()} />
+                      <CurrencyInput value={recebimentos} onChange={setRecebimentos} />
                     </div>
                   </div>
                 </div>
@@ -481,15 +715,7 @@ export default function SimulacaoPage() {
                     </label>
                     <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: '1px solid #e2e8f0' }}>
                       <span className="text-sm" style={{ color: '#94a3b8' }}>R$</span>
-                      <input
-                        type="text"
-                        value={comissaoDesejada}
-                        onChange={(e) => { setComissaoDesejada(e.target.value); setReversoCalculado(false); }}
-                        placeholder="0,00"
-                        className="w-48 outline-none text-sm font-medium"
-                        style={{ color: '#0a1628' }}
-                        onFocus={(e) => e.target.select()}
-                      />
+                      <CurrencyInput value={comissaoDesejada} onChange={(v) => { setComissaoDesejada(v); setReversoCalculado(false); }} className="w-48 outline-none text-sm font-medium" />
                     </div>
                   </div>
                   <button
@@ -608,6 +834,227 @@ export default function SimulacaoPage() {
               </div>
             )}
           </>
+        )}
+        </>)}
+
+        {/* ── FERRAGENS ────────────────────────────────────────── */}
+        {modoSetor === 'ferragens' && (
+          <div className="space-y-5">
+            {/* Filtros Ferragens */}
+            <div className="rounded-xl p-4 flex flex-wrap items-end gap-4"
+              style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+              {isCargo !== 'VENDEDOR' && (
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium uppercase tracking-wide" style={{ color: '#64748b' }}>Vendedor</label>
+                  <VendedorCombobox
+                    value={ferrVendedor}
+                    onChange={(v) => { setFerrVendedor(v); setFerrResultado(null); }}
+                    options={ferrVendedores}
+                  />
+                </div>
+              )}
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium uppercase tracking-wide" style={{ color: '#64748b' }}>Mês</label>
+                <div className="relative">
+                  <select value={ferrMes} onChange={(e) => setFerrMes(parseInt(e.target.value))}
+                    className="appearance-none rounded-lg px-3 py-2 pr-8 text-sm font-medium cursor-pointer"
+                    style={{ border: '1px solid #e2e8f0', color: '#00205C', minWidth: 130 }}>
+                    {MESES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+                  </select>
+                  <ChevronDown size={14} className="absolute right-2 top-3 pointer-events-none" style={{ color: '#64748b' }} />
+                </div>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs font-medium uppercase tracking-wide" style={{ color: '#64748b' }}>Ano</label>
+                <div className="relative">
+                  <select value={ferrAno} onChange={(e) => setFerrAno(parseInt(e.target.value))}
+                    className="appearance-none rounded-lg px-3 py-2 pr-8 text-sm font-medium cursor-pointer"
+                    style={{ border: '1px solid #e2e8f0', color: '#00205C', minWidth: 100 }}>
+                    {ANOS.map((a) => <option key={a} value={a}>{a}</option>)}
+                  </select>
+                  <ChevronDown size={14} className="absolute right-2 top-3 pointer-events-none" style={{ color: '#64748b' }} />
+                </div>
+              </div>
+              {loadingFerrConf && <span className="text-sm" style={{ color: '#64748b' }}>Carregando...</span>}
+            </div>
+
+            {ferrVendedor && !loadingFerrConf && (
+              <>
+                {/* Metas e bônus configurados */}
+                {ferrMetasVisiveis.length > 0 && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="rounded-xl p-4" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+                      <h3 className="text-sm font-bold mb-3" style={{ color: '#00205C' }}>
+                        Metas Ferragens — {MESES[ferrMes - 1]} {ferrAno}
+                      </h3>
+                      <div className="space-y-2">
+                        {ferrMetasVisiveis.map((m, i) => (
+                          <div key={i} className="flex justify-between items-center py-1.5 px-3 rounded-lg text-sm"
+                            style={{ background: ['#eff6ff','#f0fdf4','#fffbeb','#fdf4ff'][i] }}>
+                            <span className="font-medium" style={{ color: ['#1e40af','#065f46','#92400e','#6b21a8'][i] }}>{m.label}</span>
+                            <span style={{ color: '#64748b' }}>{formatBRL(m.valor)}</span>
+                            <span className="font-bold" style={{ color: ['#1e40af','#065f46','#92400e','#6b21a8'][i] }}>{m.pct}%</span>
+                          </div>
+                        ))}
+                        {(ferrMetaConf?.percentual_sem_meta ?? 0) > 0 && (
+                          <div className="flex justify-between items-center py-1.5 px-3 rounded-lg text-sm"
+                            style={{ background: '#fff1f2' }}>
+                            <span className="font-medium" style={{ color: '#991b1b' }}>Sem meta</span>
+                            <span style={{ color: '#64748b' }}>—</span>
+                            <span className="font-bold" style={{ color: '#991b1b' }}>{ferrMetaConf?.percentual_sem_meta}% recebimentos</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    {ferrBonusConf && (
+                      <div className="rounded-xl p-4" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+                        <h3 className="text-sm font-bold mb-3" style={{ color: '#00205C' }}>
+                          Bônus Individual — {MESES[ferrMes - 1]} {ferrAno}
+                        </h3>
+                        <div className="space-y-2">
+                          {[
+                            { label: 'Bônus 1', valor: ferrBonusConf.bonus1_valor },
+                            { label: 'Bônus 2', valor: ferrBonusConf.bonus2_valor },
+                            { label: 'Bônus 3', valor: ferrBonusConf.bonus3_valor },
+                            { label: 'Bônus Desafio', valor: ferrBonusConf.bonusdesafio_valor },
+                          ].filter(b => b.valor > 0).map((b, i) => (
+                            <div key={i} className="flex justify-between items-center py-1.5 px-3 rounded-lg text-sm"
+                              style={{ background: ['#eff6ff','#f0fdf4','#fffbeb','#fdf4ff'][i] }}>
+                              <span className="font-medium" style={{ color: '#64748b' }}>{b.label}</span>
+                              <span className="font-bold" style={{ color: '#00205C' }}>{formatBRL(b.valor)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {!ferrMetasVisiveis.length && (
+                  <div className="rounded-xl p-4 text-sm text-center"
+                    style={{ background: '#fffbeb', color: '#92400e', border: '1px solid #fde68a' }}>
+                    Nenhuma meta configurada para {ferrVendedor} em {MESES[ferrMes - 1]} {ferrAno}. Configure em Configuração → Ferragens.
+                  </div>
+                )}
+
+                {/* ── SIMULAÇÃO DIRETA ── */}
+                <div className="rounded-xl p-5 space-y-5" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+                    <h3 className="text-sm font-bold" style={{ color: '#00205C' }}>
+                      <Calculator size={15} className="inline mr-2" />
+                      Simulação direta — Ferragens
+                    </h3>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#64748b' }}>Total Vendido (vendedor)</label>
+                        <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: '1px solid #e2e8f0' }}>
+                          <span className="text-sm" style={{ color: '#94a3b8' }}>R$</span>
+                          <CurrencyInput value={ferrTotalVendas} onChange={setFerrTotalVendas} />
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#64748b' }}>Recebimentos do mês</label>
+                          {ferrMediaRec && ferrMediaRec.media > 0 && (
+                            <button
+                              onClick={() => setFerrRecebimentos(Math.round(ferrMediaRec.media).toLocaleString('pt-BR'))}
+                              className="text-xs font-medium px-2 py-0.5 rounded"
+                              style={{ background: '#eff6ff', color: '#1e40af' }}>
+                              Usar média ({formatBRL(ferrMediaRec.media)})
+                            </button>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: '1px solid #e2e8f0' }}>
+                          <span className="text-sm" style={{ color: '#94a3b8' }}>R$</span>
+                          <CurrencyInput value={ferrRecebimentos} onChange={setFerrRecebimentos} />
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#64748b' }}>Vendas do Setor (grupo)</label>
+                          {ferrMediaSetor && ferrMediaSetor.media > 0 && (
+                            <button
+                              onClick={() => setFerrVendasSetor(Math.round(ferrMediaSetor.media).toLocaleString('pt-BR'))}
+                              className="text-xs font-medium px-2 py-0.5 rounded"
+                              style={{ background: '#eff6ff', color: '#1e40af' }}>
+                              Usar média ({formatBRL(ferrMediaSetor.media)})
+                            </button>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 rounded-lg px-3 py-2" style={{ border: '1px solid #e2e8f0' }}>
+                          <span className="text-sm" style={{ color: '#94a3b8' }}>R$</span>
+                          <CurrencyInput value={ferrVendasSetor} onChange={setFerrVendasSetor} />
+                        </div>
+                      </div>
+                    </div>
+                    <button onClick={simularFerragens}
+                      className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold"
+                      style={{ background: '#00205C', color: '#FFD700' }}>
+                      <Calculator size={15} /> Calcular
+                    </button>
+
+                    {ferrResultado && (
+                      <div className="space-y-4 pt-2 border-t" style={{ borderColor: '#f1f5f9' }}>
+                        <div className="grid grid-cols-3 gap-4">
+                          <div className="rounded-xl p-4 text-center"
+                            style={{ background: ferrResultado.meta_atingida ? '#f0fdf4' : '#fff1f2', border: `1px solid ${ferrResultado.meta_atingida ? '#bbf7d0' : '#fecdd3'}` }}>
+                            <TrendingUp size={18} className="mx-auto mb-2" style={{ color: ferrResultado.meta_atingida ? '#16a34a' : '#dc2626' }} />
+                            <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#64748b' }}>Meta Individual</p>
+                            <p className="text-sm font-bold mt-1" style={{ color: ferrResultado.meta_atingida ? '#16a34a' : '#dc2626' }}>
+                              {ferrResultado.meta_atingida?.label ?? 'Não atingida'}
+                            </p>
+                            {ferrResultado.meta_atingida && (
+                              <p className="text-xs mt-0.5" style={{ color: '#64748b' }}>{ferrResultado.meta_atingida.percentual}% × recebimentos</p>
+                            )}
+                          </div>
+                          <div className="rounded-xl p-4 text-center"
+                            style={{ background: ferrResultado.grupo_meta_atingida ? '#eff6ff' : '#f8fafc', border: `1px solid ${ferrResultado.grupo_meta_atingida ? '#bfdbfe' : '#e2e8f0'}` }}>
+                            <Award size={18} className="mx-auto mb-2" style={{ color: ferrResultado.grupo_meta_atingida ? '#1e40af' : '#94a3b8' }} />
+                            <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#64748b' }}>Meta Grupo</p>
+                            <p className="text-sm font-bold mt-1" style={{ color: ferrResultado.grupo_meta_atingida ? '#1e40af' : '#94a3b8' }}>
+                              {ferrResultado.grupo_meta_atingida?.label ?? 'Não atingida'}
+                            </p>
+                          </div>
+                          <div className="rounded-xl p-4 text-center" style={{ background: '#eff6ff', border: '1px solid #bfdbfe' }}>
+                            <DollarSign size={18} className="mx-auto mb-2" style={{ color: '#1e40af' }} />
+                            <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#64748b' }}>Total a Receber</p>
+                            <p className="text-lg font-bold mt-1" style={{ color: '#00205C' }}>{formatBRL(ferrResultado.comissao_total)}</p>
+                          </div>
+                        </div>
+                        <div className="rounded-xl p-4 space-y-2" style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                          <p className="text-xs font-bold uppercase tracking-wide mb-3" style={{ color: '#64748b' }}>Detalhamento</p>
+                          <div className="flex justify-between text-sm py-1 border-b" style={{ borderColor: '#e2e8f0' }}>
+                            <span style={{ color: '#64748b' }}>Total vendido (vendedor)</span>
+                            <span className="font-semibold" style={{ color: '#0a1628' }}>{formatBRL(ferrResultado.vendas_total)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm py-1 border-b" style={{ borderColor: '#e2e8f0' }}>
+                            <span style={{ color: '#64748b' }}>Recebimentos</span>
+                            <span className="font-semibold" style={{ color: '#0a1628' }}>{formatBRL(ferrResultado.recebido)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm py-1 border-b" style={{ borderColor: '#e2e8f0' }}>
+                            <span style={{ color: '#64748b' }}>
+                              Comissão meta{ferrResultado.meta_atingida ? ` (${ferrResultado.meta_atingida.percentual}% × recebimentos)` : ferrMetaConf && ferrMetaConf.percentual_sem_meta > 0 ? ` (${ferrMetaConf.percentual_sem_meta}% sem meta × recebimentos)` : ' (sem meta)'}
+                            </span>
+                            <span className="font-semibold" style={{ color: '#0a1628' }}>{formatBRL(ferrResultado.comissao_meta)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm py-1 border-b" style={{ borderColor: '#e2e8f0' }}>
+                            <span style={{ color: '#64748b' }}>Bônus individual{ferrResultado.meta_atingida ? ` (${ferrResultado.meta_atingida.label})` : ''}</span>
+                            <span className="font-semibold" style={{ color: '#0a1628' }}>{formatBRL(ferrResultado.comissao_bonus)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm py-1 border-b" style={{ borderColor: '#e2e8f0' }}>
+                            <span style={{ color: '#64748b' }}>Bônus grupo{ferrResultado.grupo_meta_atingida ? ` (${ferrResultado.grupo_meta_atingida.label})` : ' (não liberado)'}</span>
+                            <span className="font-semibold" style={{ color: '#0a1628' }}>{formatBRL(ferrResultado.comissao_grupo)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm py-2 font-bold">
+                            <span style={{ color: '#00205C' }}>Total comissão</span>
+                            <span style={{ color: '#00205C', fontSize: 16 }}>{formatBRL(ferrResultado.comissao_total)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                </div>
+              </>
+            )}
+          </div>
         )}
       </div>
     </AppShell>

@@ -3,7 +3,7 @@
 import Sidebar from './Sidebar';
 import { useUser } from '../providers/UserProvider';
 
-export default function AppShell({ children }: { children: React.ReactNode }) {
+export default function AppShell({ children, loading }: { children: React.ReactNode; loading?: boolean }) {
   const usuario = useUser();
 
   if (usuario === 'loading') {
@@ -42,7 +42,30 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
-      <main className="flex-1 overflow-auto">{children}</main>
+      <main className="flex-1 overflow-auto relative">
+        {children}
+        {loading && (
+          <div
+            style={{
+              position: 'absolute', inset: 0, zIndex: 50,
+              background: 'rgba(0,0,0,0.45)',
+              display: 'flex', flexDirection: 'column',
+              alignItems: 'center', justifyContent: 'center', gap: 16,
+            }}
+          >
+            <div style={{
+              width: 48, height: 48, borderRadius: '50%',
+              border: '4px solid rgba(255,215,0,0.2)',
+              borderTopColor: '#FFD700',
+              animation: 'spin 0.8s linear infinite',
+            }} />
+            <span style={{ color: '#FFD700', fontWeight: 600, fontSize: 14, letterSpacing: 1 }}>
+              Carregando...
+            </span>
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          </div>
+        )}
+      </main>
     </div>
   );
 }

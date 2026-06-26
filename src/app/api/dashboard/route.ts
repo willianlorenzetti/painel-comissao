@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPool, sql } from '@/lib/db';
-import { getUsuario, podeVerTudo, buildSetorFilter } from '@/lib/permissions';
-import { addSetoresGlobais } from '@/lib/setores';
+import { getUsuario, podeVerTudo } from '@/lib/permissions';
 import { calcularComissaoTelevendas, MetaConfig, BonusConfig } from '@/lib/commission';
+import {
+  getVendas, getRecebimentos,
+  filtrarVendas, filtrarReceb,
+  somarVendas, somarReceb,
+  groupBy,
+} from '@/lib/dados-externos';
 
 export async function GET(req: NextRequest) {
   const email = req.headers.get('x-user-email');
@@ -11,154 +16,136 @@ export async function GET(req: NextRequest) {
   const usuario = await getUsuario(email);
   if (!usuario) return NextResponse.json({ error: 'Sem permissão' }, { status: 403 });
 
-  // Vendedor não acessa o dashboard geral
   if (usuario.cargo === 'VENDEDOR') {
     return NextResponse.json({ error: 'Sem permissão' }, { status: 403 });
   }
 
   const { searchParams } = new URL(req.url);
-  const ano = searchParams.get('ano') || new Date().getFullYear().toString();
+  const ano = parseInt(searchParams.get('ano') || new Date().getFullYear().toString());
   const mes = searchParams.get('mes');
 
+  const dataInicio = mes ? `${ano}-${mes.padStart(2, '0')}-01` : `${ano}-01-01`;
+  const dataFim = mes
+    ? new Date(ano, parseInt(mes), 0).toISOString().split('T')[0]
+    : `${ano}-12-31`;
+
+  const verTudo = podeVerTudo(usuario.cargo);
+  const userSetores = verTudo ? [] : usuario.setores;
+
   try {
-    const pool = await getPool();
+    const [todasVendas, todosReceb] = await Promise.all([
+      getVendas(ano),
+      getRecebimentos(ano),
+    ]);
 
-    const dataInicio = mes ? `${ano}-${mes.padStart(2, '0')}-01` : `${ano}-01-01`;
-    const dataFim = mes
-      ? new Date(parseInt(ano), parseInt(mes), 0).toISOString().split('T')[0]
-      : `${ano}-12-31`;
+    const fBase = { userSetores, setores: [], inicio: `${ano}-01-01`, fim: `${ano}-12-31` };
+    const fPeriodo = { userSetores, setores: [], inicio: dataInicio, fim: dataFim };
 
-    const verTudo = podeVerTudo(usuario.cargo);
-    const setores = verTudo ? [] : usuario.setores;
+    const vendasAno = filtrarVendas(todasVendas, fBase);
+    const vendasPeriodo = filtrarVendas(todasVendas, fPeriodo);
 
-    const baseWhere = 'WHERE PDV_DATA >= @inicio AND PDV_DATA <= @fim';
-    const baseWhereAno = 'WHERE PDV_DATA >= @inicioAno AND PDV_DATA <= @fimAno';
+    // ── Total Ano ──────────────────────────────────────────────────────────
+    const total_vendas = somarVendas(vendasAno);
+    const total_vendedores = new Set(vendasAno.filter(v => v.SUM > 0 && v.USU_NOME).map(v => v.USU_NOME)).size;
+    const total_setores = new Set(vendasAno.filter(v => v.RVS_NOME).map(v => v.RVS_NOME)).size;
 
-    const [totalAno, totalMes, topVendedores, porSetor, porEmpresa, tendencia] =
-      await Promise.all([
-        (() => {
-          const r = pool.request()
-            .input('inicioAno', sql.Date, `${ano}-01-01`)
-            .input('fimAno', sql.Date, `${ano}-12-31`);
-          let w = buildSetorFilter(r, setores, baseWhereAno);
-          w = addSetoresGlobais(r, w);
-          return r.query(`
-            SELECT COUNT(DISTINCT CASE WHEN [SUM] > 0 THEN USU_NOME END) as total_vendedores,
-                   COUNT(DISTINCT RVS_NOME) as total_setores,
-                   SUM([SUM]) as total_vendas, SUM(QTDE) as total_qtde
-            FROM [TI-COMERCIAL_45-VendaPorSetor] ${w}
-          `);
-        })(),
+    // ── Total Mês / Período ────────────────────────────────────────────────
+    const total_vendas_mes = somarVendas(vendasPeriodo);
 
-        (() => {
-          const r = pool.request()
-            .input('inicio', sql.Date, dataInicio)
-            .input('fim', sql.Date, dataFim);
-          let w = buildSetorFilter(r, setores, baseWhere);
-          w = addSetoresGlobais(r, w);
-          return r.query(`
-            SELECT SUM([SUM]) as total_mes
-            FROM [TI-COMERCIAL_45-VendaPorSetor] ${w}
-          `);
-        })(),
+    // ── Top 10 vendedores (período) ────────────────────────────────────────
+    const byVend = groupBy(vendasPeriodo.filter(v => v.USU_NOME), v => `${v.USU_NOME}||${v.RVS_NOME}||${v.EMP}`);
+    const top_vendedores = [...byVend.entries()]
+      .map(([k, rows]) => {
+        const [vendedor, setor, empresa] = k.split('||');
+        return {
+          vendedor,
+          setor,
+          empresa,
+          total_vendas: somarVendas(rows),
+          total_qtde: rows.reduce((s, r) => s + r.QTDE, 0),
+          total_registros: rows.length,
+        };
+      })
+      .sort((a, b) => b.total_vendas - a.total_vendas)
+      .slice(0, 10);
 
-        (() => {
-          const r = pool.request()
-            .input('inicio', sql.Date, dataInicio)
-            .input('fim', sql.Date, dataFim);
-          let w = buildSetorFilter(r, setores, `${baseWhere} AND USU_NOME IS NOT NULL`);
-          w = addSetoresGlobais(r, w);
-          return r.query(`
-            SELECT TOP 10 USU_NOME as vendedor, RVS_NOME as setor, EMP as empresa,
-                   SUM([SUM]) as total_vendas, SUM(QTDE) as total_qtde, COUNT(*) as total_registros
-            FROM [TI-COMERCIAL_45-VendaPorSetor] ${w}
-            GROUP BY USU_NOME, RVS_NOME, EMP ORDER BY total_vendas DESC
-          `);
-        })(),
+    // ── Vendas por setor (período) ─────────────────────────────────────────
+    const bySetor = groupBy(vendasPeriodo.filter(v => v.RVS_NOME), v => v.RVS_NOME!);
+    const vendas_por_setor = [...bySetor.entries()]
+      .map(([setor, rows]) => ({
+        setor,
+        total_vendas: somarVendas(rows),
+        total_qtde: rows.reduce((s, r) => s + r.QTDE, 0),
+        total_registros: rows.length,
+      }))
+      .sort((a, b) => b.total_vendas - a.total_vendas);
 
-        (() => {
-          const r = pool.request()
-            .input('inicio', sql.Date, dataInicio)
-            .input('fim', sql.Date, dataFim);
-          let w = buildSetorFilter(r, setores, `${baseWhere} AND RVS_NOME IS NOT NULL`);
-          w = addSetoresGlobais(r, w);
-          return r.query(`
-            SELECT RVS_NOME as setor, SUM([SUM]) as total_vendas,
-                   SUM(QTDE) as total_qtde, COUNT(*) as total_registros
-            FROM [TI-COMERCIAL_45-VendaPorSetor] ${w}
-            GROUP BY RVS_NOME ORDER BY total_vendas DESC
-          `);
-        })(),
+    // ── Vendas por empresa (ano) ───────────────────────────────────────────
+    const byEmp = groupBy(vendasAno, v => v.EMP);
+    const vendas_por_empresa = [...byEmp.entries()]
+      .map(([empresa, rows]) => ({
+        empresa,
+        total_vendas: somarVendas(rows),
+        total_qtde: rows.reduce((s, r) => s + r.QTDE, 0),
+      }))
+      .sort((a, b) => b.total_vendas - a.total_vendas);
 
-        (() => {
-          const r = pool.request()
-            .input('inicioAno', sql.Date, `${ano}-01-01`)
-            .input('fimAno', sql.Date, `${ano}-12-31`);
-          let w = buildSetorFilter(r, setores, baseWhereAno);
-          w = addSetoresGlobais(r, w);
-          return r.query(`
-            SELECT LTRIM(RTRIM(EMP)) as empresa, SUM([SUM]) as total_vendas, SUM(QTDE) as total_qtde
-            FROM [TI-COMERCIAL_45-VendaPorSetor] ${w}
-            GROUP BY LTRIM(RTRIM(EMP)) ORDER BY total_vendas DESC
-          `);
-        })(),
+    // ── Tendência mensal (ano) ─────────────────────────────────────────────
+    const byMes = groupBy(vendasAno, v => {
+      const m = v.PDV_DATA.getMonth() + 1;
+      return `${ano}-${String(m).padStart(2, '0')}`;
+    });
+    const tendencia_mensal = [...byMes.entries()]
+      .map(([key, rows]) => {
+        const m = parseInt(key.split('-')[1]);
+        return {
+          ano,
+          mes: m,
+          total_vendas: somarVendas(rows),
+          total_qtde: rows.reduce((s, r) => s + r.QTDE, 0),
+        };
+      })
+      .sort((a, b) => a.mes - b.mes);
 
-        (() => {
-          const r = pool.request()
-            .input('inicioAno', sql.Date, `${ano}-01-01`)
-            .input('fimAno', sql.Date, `${ano}-12-31`);
-          let w = buildSetorFilter(r, setores, baseWhereAno);
-          w = addSetoresGlobais(r, w);
-          return r.query(`
-            SELECT YEAR(PDV_DATA) as ano, MONTH(PDV_DATA) as mes,
-                   SUM([SUM]) as total_vendas, SUM(QTDE) as total_qtde
-            FROM [TI-COMERCIAL_45-VendaPorSetor] ${w}
-            GROUP BY YEAR(PDV_DATA), MONTH(PDV_DATA) ORDER BY ano, mes
-          `);
-        })(),
-      ]);
-
-    // ── Comissão Televendas (só quando mês específico selecionado) ──
+    // ── Comissão Televendas (só quando mês selecionado) ────────────────────
     let total_pa_televendas = 0;
     let total_recebimentos_televendas = 0;
     let total_comissao_televendas = 0;
 
     if (mes) {
       try {
-        const [paResult, recResult, metaResult, bonusResult] = await Promise.all([
+        const pool = await getPool();
+
+        const televendasSetores = ['TELEVENDAS', 'TELEVENDAS MG'];
+
+        // PA = vendas televendas no período
+        const vendasTv = filtrarVendas(todasVendas, { ...fPeriodo, setores: televendasSetores });
+        const paMap: Record<string, number> = {};
+        vendasTv.filter(v => v.USU_NOME).forEach(v => {
+          paMap[v.USU_NOME!] = (paMap[v.USU_NOME!] ?? 0) + v.SUM;
+        });
+
+        // Vendedores televendas
+        const vendedoresTv = Object.keys(paMap);
+
+        // Recebimentos televendas no período
+        const recebTv = filtrarReceb(todosReceb, { inicio: dataInicio, fim: dataFim });
+        const recMap: Record<string, number> = {};
+        recebTv
+          .filter(r => r.REP_NOME && vendedoresTv.includes(r.REP_NOME))
+          .forEach(r => { recMap[r.REP_NOME!] = (recMap[r.REP_NOME!] ?? 0) + r.TOTAL; });
+
+        // Metas e bônus do SQL Server (configuração permanece lá)
+        const [metaResult, bonusResult] = await Promise.all([
           pool.request()
-            .input('paInicio', sql.Date, dataInicio)
-            .input('paFim', sql.Date, dataFim)
-            .query(`
-              SELECT USU_NOME as vendedor, SUM([SUM]) as valor_pa
-              FROM [TI-COMERCIAL_45-VendaPorSetor]
-              WHERE PDV_DATA >= @paInicio AND PDV_DATA <= @paFim
-                AND RVS_NOME IN ('TELEVENDAS','TELEVENDAS MG')
-                AND USU_NOME IS NOT NULL
-              GROUP BY USU_NOME
-            `),
-          pool.request()
-            .input('recInicio', sql.Date, dataInicio)
-            .input('recFim', sql.Date, dataFim)
-            .query(`
-              SELECT REP_NOME as vendedor, SUM(TOTAL) as total_recebido
-              FROM [TI-FINANCEIRO_55-Recebimento]
-              WHERE DATABAIXA >= @recInicio AND DATABAIXA <= @recFim
-                AND REP_NOME IN (
-                  SELECT DISTINCT USU_NOME FROM [TI-COMERCIAL_45-VendaPorSetor]
-                  WHERE RVS_NOME IN ('TELEVENDAS','TELEVENDAS MG') AND USU_NOME IS NOT NULL
-                )
-              GROUP BY REP_NOME
-            `),
-          pool.request()
-            .input('metaAno', sql.Int, parseInt(ano))
+            .input('metaAno', sql.Int, ano)
             .input('metaMes', sql.VarChar, mes)
             .query(`
               SELECT VENDEDOR as nome_vendedor,
                      META1_VALOR as meta1_valor, META1_PERCENTUAL as meta1_percentual,
                      META2_VALOR as meta2_valor, META2_PERCENTUAL as meta2_percentual,
                      META3_VALOR as meta3_valor, META3_PERCENTUAL as meta3_percentual,
-                     ISNULL(PERCENTUAL_SEM_META, 0) as percentual_sem_meta
+                     ISNULL(PERCENTUAL_SEM_META,0) as percentual_sem_meta
               FROM [TI-PAINELCOMISSAO_METAS]
               WHERE ANO = @metaAno AND MES = @metaMes
             `),
@@ -172,16 +159,6 @@ export async function GET(req: NextRequest) {
             FROM [TI-PAINELCOMISSAO_BONUS_CONFIG]
           `),
         ]);
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const paMap: Record<string, number> = {};
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        paResult.recordset.forEach((r: any) => { paMap[r.vendedor] = Number(r.valor_pa); });
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const recMap: Record<string, number> = {};
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        recResult.recordset.forEach((r: any) => { recMap[r.vendedor] = Number(r.total_recebido); });
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const metaMap: Record<string, MetaConfig> = {};
@@ -223,14 +200,14 @@ export async function GET(req: NextRequest) {
     }
 
     return NextResponse.json({
-      total_vendas: totalAno.recordset[0]?.total_vendas || 0,
-      total_vendas_mes: totalMes.recordset[0]?.total_mes || 0,
-      total_vendedores: totalAno.recordset[0]?.total_vendedores || 0,
-      total_setores: totalAno.recordset[0]?.total_setores || 0,
-      top_vendedores: topVendedores.recordset,
-      vendas_por_setor: porSetor.recordset,
-      vendas_por_empresa: porEmpresa.recordset,
-      tendencia_mensal: tendencia.recordset,
+      total_vendas,
+      total_vendas_mes,
+      total_vendedores,
+      total_setores,
+      top_vendedores,
+      vendas_por_setor,
+      vendas_por_empresa,
+      tendencia_mensal,
       total_pa_televendas,
       total_recebimentos_televendas,
       total_comissao_televendas,
@@ -240,3 +217,4 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Erro ao buscar dados' }, { status: 500 });
   }
 }
+

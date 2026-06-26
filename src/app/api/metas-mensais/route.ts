@@ -4,7 +4,10 @@ import { getUsuario } from '@/lib/permissions';
 
 const TABELA = '[TI-PAINELCOMISSAO_METAS]';
 
+let _psmEnsured: boolean | null = null;
+
 async function garantirColunaPSM(pool: Awaited<ReturnType<typeof getPool>>): Promise<boolean> {
+  if (_psmEnsured !== null) return _psmEnsured;
   try {
     await pool.request().query(`
       IF NOT EXISTS (
@@ -15,9 +18,11 @@ async function garantirColunaPSM(pool: Awaited<ReturnType<typeof getPool>>): Pro
         ALTER TABLE ${TABELA} ADD PERCENTUAL_SEM_META FLOAT DEFAULT 0;
       END
     `);
+    _psmEnsured = true;
     return true;
   } catch (err) {
     console.error('[metas-mensais] garantirColunaPSM falhou — coluna PERCENTUAL_SEM_META não pôde ser criada:', err);
+    _psmEnsured = false;
     return false;
   }
 }
@@ -49,7 +54,9 @@ export async function GET(req: NextRequest) {
               ${psmCol}
        FROM ${TABELA} ${where} ORDER BY VENDEDOR`
     );
-    return NextResponse.json(result.recordset);
+    const res = NextResponse.json(result.recordset);
+    res.headers.set('Cache-Control', 'private, max-age=60, stale-while-revalidate=120');
+    return res;
   } catch (error) {
     console.error('Erro ao buscar metas mensais:', error);
     return NextResponse.json({ error: 'Erro ao buscar dados' }, { status: 500 });

@@ -13,7 +13,9 @@
     "jose": "^6.2.3",
     "lucide-react": "^1.21.0",
     "mssql": "^12.5.5",
+    "mysql2": "^3.22.5",
     "next": "16.2.9",
+    "node-firebird": "^2.3.2",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.8.1"

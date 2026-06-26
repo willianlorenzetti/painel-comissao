@@ -142,7 +142,7 @@ export default function DashboardPage() {
   const comProjecao = (data?.total_comissao_televendas ?? 0) * ratioProjecao;
 
   return (
-    <AppShell>
+    <AppShell loading={loading}>
       <div className="p-6 space-y-6 animate-fade-in">
         {/* Header */}
         <div className="flex items-center justify-between">
