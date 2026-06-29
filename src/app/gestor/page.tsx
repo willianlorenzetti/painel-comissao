@@ -220,9 +220,9 @@ export default function GestorPage() {
   };
 
   const top8Grafico = vendedoresFiltrados.slice(0, 8).map((v) => ({
-    name: nomeAbrev(v.vendedor),
-    Faturamento: v.total_vendas,
-    PA: v.setor === 'FERRAGENS' ? 0 : (v.valor_pa ?? 0),
+    name: v.is_televendas ? `${nomeAbrev(v.vendedor)} (PA)` : nomeAbrev(v.vendedor),
+    Faturamento: v.is_televendas ? (v.valor_pa ?? 0) : v.total_vendas,
+    Recebimento: v.total_recebido ?? 0,
   }));
 
   const exportCSV = () => {
@@ -378,16 +378,16 @@ export default function GestorPage() {
         <div className="rounded-xl p-5 shadow-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold" style={{ color: '#00205C' }}>
-              Top 8 Vendedores — Faturamento e PA
+              Top 8 Vendedores — Faturamento e Recebimento
             </h2>
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-1.5">
                 <div className="w-3 h-3 rounded-sm" style={{ background: '#00205C' }} />
-                <span className="text-xs" style={{ color: '#64748b' }}>Faturamento</span>
+                <span className="text-xs" style={{ color: '#64748b' }}>Faturamento (ou PA)</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="w-3 h-3 rounded-sm" style={{ background: '#FFD700' }} />
-                <span className="text-xs" style={{ color: '#64748b' }}>Valor PA</span>
+                <span className="text-xs" style={{ color: '#64748b' }}>Recebimento</span>
               </div>
             </div>
           </div>
@@ -418,9 +418,9 @@ export default function GestorPage() {
                     style={{ fontSize: 9, fill: '#ffffff', fontWeight: 600 }}
                   />
                 </Bar>
-                <Bar dataKey="PA" fill="#FFD700" radius={[3, 3, 0, 0]}>
+                <Bar dataKey="Recebimento" fill="#FFD700" radius={[3, 3, 0, 0]}>
                   <LabelList
-                    dataKey="PA"
+                    dataKey="Recebimento"
                     position="insideTop"
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     formatter={(v: any) => v > 0 ? `${(Number(v) / 1000).toFixed(0)}k` : ''}
