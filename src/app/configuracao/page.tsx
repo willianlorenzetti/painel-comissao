@@ -48,6 +48,133 @@ function PctInput({ value, onChange, className, style, placeholder }: {
     />
   );
 }
+// Input de valor (R$) com máscara de milhar/decimal (pt-BR) sem resetar durante digitação
+function ValorInput({ value, onChange, className, style, placeholder }: {
+  value: number;
+  onChange: (v: number) => void;
+  className?: string;
+  style?: React.CSSProperties;
+  placeholder?: string;
+}) {
+  const formatarExibicao = (n: number) => n === 0 ? '' : n.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
+
+  const aplicarMascara = (txt: string) => {
+    const limpo = txt.replace(/[^\d,]/g, '');
+    const primeiraVirgula = limpo.indexOf(',');
+    const semVirgulaExtra = primeiraVirgula === -1
+      ? limpo
+      : limpo.slice(0, primeiraVirgula + 1) + limpo.slice(primeiraVirgula + 1).replace(/,/g, '');
+    const [intParteRaw, decParte] = semVirgulaExtra.split(',');
+    const intParte = intParteRaw.replace(/^0+(?=\d)/, '').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    return decParte !== undefined ? `${intParte || '0'},${decParte.slice(0, 2)}` : intParte;
+  };
+
+  const paraNumero = (txt: string): number => {
+    const n = parseFloat(txt.replace(/\./g, '').replace(',', '.'));
+    return isNaN(n) ? 0 : n;
+  };
+
+  const [raw, setRaw] = useState(formatarExibicao(value));
+  const lastExternal = useRef(value);
+
+  useEffect(() => {
+    if (value !== lastExternal.current) {
+      lastExternal.current = value;
+      setRaw(formatarExibicao(value));
+    }
+  }, [value]);
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={raw}
+      className={className}
+      style={style}
+      placeholder={placeholder}
+      onFocus={(e) => e.target.select()}
+      onChange={(e) => {
+        const mascarado = aplicarMascara(e.target.value);
+        setRaw(mascarado);
+        const num = paraNumero(mascarado);
+        lastExternal.current = num;
+        onChange(num);
+      }}
+      onBlur={() => {
+        const num = paraNumero(raw);
+        lastExternal.current = num;
+        onChange(num);
+        setRaw(formatarExibicao(num));
+      }}
+    />
+  );
+}
+// Select com busca — digita para filtrar, clica para escolher
+function BuscaSelect({ value, onChange, options, placeholder }: {
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+  placeholder: string;
+}) {
+  const [busca, setBusca] = useState(value);
+  const [aberto, setAberto] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { setBusca(value); }, [value]);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (
+        inputRef.current && !inputRef.current.contains(e.target as Node) &&
+        dropdownRef.current && !dropdownRef.current.contains(e.target as Node)
+      ) {
+        setAberto(false);
+        setBusca(value);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [value]);
+
+  const normalizar = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const buscaNorm = normalizar(busca);
+  const filtradas = options.filter(o => normalizar(o).includes(buscaNorm));
+
+  return (
+    <div className="relative" style={{ minWidth: 240 }}>
+      <input
+        ref={inputRef}
+        type="text"
+        value={busca}
+        onChange={(e) => { setBusca(e.target.value); setAberto(true); if (value) onChange(''); }}
+        onFocus={() => { setBusca(''); setAberto(true); }}
+        placeholder={placeholder}
+        className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+        style={{ border: '1px solid #cbd5e1', color: '#0a1628' }}
+      />
+      {aberto && (
+        <div ref={dropdownRef}
+          className="absolute top-full left-0 mt-1 w-full rounded-lg z-50 overflow-hidden"
+          style={{ background: '#0a1628', border: '1px solid #1a3a6e', boxShadow: '0 8px 24px rgba(0,0,0,0.3)', maxHeight: 240, overflowY: 'auto' }}>
+          {filtradas.length > 0 ? filtradas.map((o) => (
+            <button key={o} type="button"
+              onMouseDown={() => { onChange(o); setBusca(o); setAberto(false); }}
+              className="w-full text-left px-3 py-2 text-xs transition-colors"
+              style={{ color: value === o ? '#FFD700' : '#cbd5e1', background: value === o ? '#1a3a6e' : 'transparent' }}
+              onMouseEnter={(e) => { if (value !== o) (e.currentTarget as HTMLElement).style.background = '#1a3a6e'; }}
+              onMouseLeave={(e) => { if (value !== o) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
+              {o}
+            </button>
+          )) : (
+            <div className="px-3 py-2 text-xs" style={{ color: '#64748b' }}>Nenhum resultado</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 import AppShell from '@/components/layout/AppShell';
 import { MESES, formatBRL } from '@/lib/format';
 import { Save, CheckCircle, AlertCircle, Calendar, Users, Loader2 } from 'lucide-react';
@@ -94,6 +221,15 @@ interface FerrMetaGrupo {
   metadesafio_valor: number; metadesafio_bonus: number;
 }
 
+interface DistVendedorMeta {
+  nome_vendedor: string;
+  meta1_valor: number; meta1_percentual: number;
+  meta2_valor: number; meta2_percentual: number;
+  meta3_valor: number; meta3_percentual: number;
+  metadesafio_valor: number; metadesafio_percentual: number;
+  percentual_sem_meta: number;
+}
+
 const BONUS_VAZIO: BonusConfig = {
   bonus1_valor: 0, bonus1_percentual: 0,
   bonus2_valor: 0, bonus2_percentual: 0,
@@ -122,7 +258,7 @@ const FERR_META_GRUPO_VAZIO: FerrMetaGrupo = {
 export default function ConfiguracaoPage() {
   const usuario = useUser();
   const router = useRouter();
-  const [aba, setAba] = useState<'televendas' | 'ferragens' | 'vendedores'>('televendas');
+  const [aba, setAba] = useState<'televendas' | 'ferragens' | 'distribuidores' | 'vendedores'>('televendas');
   const [tvAba, setTvAba] = useState<'metas' | 'bonus'>('metas');
 
   // ── Vendedores ativo/inativo ──
@@ -163,6 +299,26 @@ export default function ConfiguracaoPage() {
   const [loadingFerr, setLoadingFerr] = useState(false);
   const [ferrBuscaVend, setFerrBuscaVend] = useState('');
 
+  // ── Distribuidores ──
+  const [distAba, setDistAba] = useState<'metas' | 'vinculos'>('metas');
+  const [distMesConf, setDistMesConf] = useState(new Date().getMonth() + 1);
+  const [distAnoConf, setDistAnoConf] = useState(new Date().getFullYear());
+  const [distVendedores, setDistVendedores] = useState<string[]>([]);
+  const [distMetasEdit, setDistMetasEdit] = useState<Record<string, DistVendedorMeta>>({});
+  const [savingDistMetas, setSavingDistMetas] = useState(false);
+  const [savedDistMetas, setSavedDistMetas] = useState(false);
+  const [loadingDist, setLoadingDist] = useState(false);
+  const [distBuscaVend, setDistBuscaVend] = useState('');
+
+  // ── Distribuidores: Vínculos (vendedor vinculado → vendedor principal) ──
+  const [distNomesRaw, setDistNomesRaw] = useState<string[]>([]);
+  const [distVinculos, setDistVinculos] = useState<Record<string, string>>({});
+  const [loadingDistVinculos, setLoadingDistVinculos] = useState(false);
+  const [savingDistVinculos, setSavingDistVinculos] = useState(false);
+  const [savedDistVinculos, setSavedDistVinculos] = useState(false);
+  const [novoVinculado, setNovoVinculado] = useState('');
+  const [novoPrincipal, setNovoPrincipal] = useState('');
+
   useEffect(() => {
     if (usuario && usuario !== 'loading' && !['ADM', 'GESTOR'].includes(usuario.cargo)) {
       router.push('/sem-acesso');
@@ -201,6 +357,18 @@ export default function ConfiguracaoPage() {
     carregarDadosFerragens(ferrAnoConf, ferrMesConf);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aba, ferrAnoConf, ferrMesConf, usuario]);
+
+  useEffect(() => {
+    if (!usuario || usuario === 'loading' || aba !== 'distribuidores') return;
+    carregarDadosDistribuidores(distAnoConf, distMesConf);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aba, distAnoConf, distMesConf, usuario]);
+
+  useEffect(() => {
+    if (!usuario || usuario === 'loading' || aba !== 'distribuidores' || distAba !== 'vinculos') return;
+    carregarVinculosDistribuidores();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aba, distAba, usuario]);
 
   const getMensal = (nome: string): VendedorMeta =>
     metasMensaisEdit[nome] || {
@@ -390,6 +558,93 @@ export default function ConfiguracaoPage() {
     setSavingFerrGrupo(false);
   };
 
+  const carregarDadosDistribuidores = async (ano: number, mes: number) => {
+    setLoadingDist(true);
+    try {
+      const [vendRes, metasRes] = await Promise.all([
+        fetch(`/api/filtros?setor=DISTRIBUIDORES`).then(r => r.json()),
+        fetch(`/api/distribuidores/metas?ano=${ano}&mes=${mes}`).then(r => r.json()),
+      ]);
+      setDistVendedores(vendRes.vendedores || []);
+      const metasMap: Record<string, DistVendedorMeta> = {};
+      if (Array.isArray(metasRes)) metasRes.forEach((m: DistVendedorMeta) => { metasMap[m.nome_vendedor] = m; });
+      setDistMetasEdit(metasMap);
+    } catch { /* silent */ }
+    setLoadingDist(false);
+  };
+
+  const getDistMeta = (nome: string): DistVendedorMeta =>
+    distMetasEdit[nome] || { nome_vendedor: nome, meta1_valor: 0, meta1_percentual: 0, meta2_valor: 0, meta2_percentual: 0, meta3_valor: 0, meta3_percentual: 0, metadesafio_valor: 0, metadesafio_percentual: 0, percentual_sem_meta: 0 };
+
+  const updateDistMeta = (nome: string, field: keyof Omit<DistVendedorMeta, 'nome_vendedor'>, value: number) => {
+    setSavedDistMetas(false);
+    setDistMetasEdit(prev => ({ ...prev, [nome]: { ...getDistMeta(nome), [field]: value } }));
+  };
+
+  const salvarDistMetas = async () => {
+    setSavingDistMetas(true);
+    try {
+      const payload = distVendedores.map(v => ({ ...getDistMeta(v), nome_vendedor: v, ano: distAnoConf, mes: distMesConf }));
+      const res = await fetch('/api/distribuidores/metas', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (!res.ok) throw new Error(await res.text());
+      setSavedDistMetas(true);
+      setTimeout(() => setSavedDistMetas(false), 3000);
+    } catch (err) { console.error(err); alert('Erro ao salvar metas Distribuidores.'); }
+    setSavingDistMetas(false);
+  };
+
+  const carregarVinculosDistribuidores = async () => {
+    setLoadingDistVinculos(true);
+    try {
+      const [rawRes, vincRes] = await Promise.all([
+        fetch('/api/distribuidores/vendedores-raw').then(r => r.json()),
+        fetch('/api/distribuidores/vinculos').then(r => r.json()),
+      ]);
+      setDistNomesRaw(rawRes.vendedores || []);
+      const map: Record<string, string> = {};
+      if (Array.isArray(vincRes)) {
+        vincRes.forEach((v: { vendedor_vinculado: string; vendedor_principal: string }) => {
+          map[v.vendedor_vinculado] = v.vendedor_principal;
+        });
+      }
+      setDistVinculos(map);
+    } catch { /* silent */ }
+    setLoadingDistVinculos(false);
+  };
+
+  const adicionarVinculo = () => {
+    if (!novoVinculado || !novoPrincipal || novoVinculado === novoPrincipal) return;
+    setDistVinculos(prev => ({ ...prev, [novoVinculado]: novoPrincipal }));
+    setSavedDistVinculos(false);
+    setNovoVinculado('');
+    setNovoPrincipal('');
+  };
+
+  const removerVinculo = (vinculado: string) => {
+    setDistVinculos(prev => {
+      const next = { ...prev };
+      delete next[vinculado];
+      return next;
+    });
+    setSavedDistVinculos(false);
+  };
+
+  const salvarDistVinculos = async () => {
+    setSavingDistVinculos(true);
+    try {
+      const payload = Object.entries(distVinculos).map(([vendedor_vinculado, vendedor_principal]) => ({
+        vendedor_vinculado, vendedor_principal,
+      }));
+      const res = await fetch('/api/distribuidores/vinculos', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setSavedDistVinculos(true);
+      setTimeout(() => setSavedDistVinculos(false), 3000);
+    } catch (err) { console.error(err); alert('Erro ao salvar vínculos Distribuidores.'); }
+    setSavingDistVinculos(false);
+  };
+
   const vendedoresFiltrados = allVendedores.filter(
     (v) => !buscaVend || v.toLowerCase().includes(buscaVend.toLowerCase())
   );
@@ -410,6 +665,7 @@ export default function ConfiguracaoPage() {
           {([
             { key: 'televendas', label: 'Televendas' },
             { key: 'ferragens', label: 'Ferragens' },
+            { key: 'distribuidores', label: 'Distribuidores' },
             { key: 'vendedores', label: 'Vendedores' },
           ] as const).map((tab) => (
             <button
@@ -601,11 +857,11 @@ export default function ConfiguracaoPage() {
                               className="flex items-center gap-1.5 mx-2 px-2 py-1.5 rounded-lg"
                               style={{ background: bg, border: `1px solid ${border}` }}>
                               <span className="text-xs shrink-0" style={{ color: '#64748b' }}>R$</span>
-                              <input type="number" min={0} step={1000} value={m[vField] as number}
-                                onChange={(e) => updateMensal(v, vField, parseFloat(e.target.value) || 0)}
+                              <ValorInput value={m[vField] as number}
+                                onChange={(val) => updateMensal(v, vField, val)}
                                 className="flex-1 min-w-0 rounded px-1.5 py-1 text-xs text-right outline-none bg-white font-medium"
                                 style={{ border: '1px solid #e2e8f0', color: '#0a1628' }}
-                                placeholder="0" onFocus={(e) => e.target.select()} />
+                                placeholder="0" />
                               <input type="number" min={0} max={100} step={0.5} value={m[pField] as number}
                                 onChange={(e) => updateMensal(v, pField, parseFloat(e.target.value) || 0)}
                                 className="w-14 rounded px-1.5 py-1 text-xs text-center outline-none font-bold"
@@ -686,11 +942,11 @@ export default function ConfiguracaoPage() {
                             <div className="flex items-center gap-1 rounded-lg px-2 py-1.5 bg-white"
                               style={{ border: '1px solid #e2e8f0' }}>
                               <span className="text-xs shrink-0" style={{ color: '#94a3b8' }}>R$</span>
-                              <input type="number" min={0} step={1000}
+                              <ValorInput
                                 value={bonusEdit[vField] as number}
-                                onChange={(e) => updateBonus(vField, parseFloat(e.target.value) || 0)}
+                                onChange={(val) => updateBonus(vField, val)}
                                 className="flex-1 min-w-0 text-xs text-right outline-none font-medium bg-transparent"
-                                style={{ color: '#0a1628' }} placeholder="0" onFocus={(e) => e.target.select()} />
+                                style={{ color: '#0a1628' }} placeholder="0" />
                             </div>
                           </div>
                           <div className="flex flex-col gap-1">
@@ -838,11 +1094,11 @@ export default function ConfiguracaoPage() {
                                 <div key={vf} className="flex items-center gap-1 mx-2 px-2 py-1.5 rounded-lg"
                                   style={{ background: bg, border: `1px solid ${border}` }}>
                                   <span className="text-xs shrink-0" style={{ color: '#64748b' }}>R$</span>
-                                  <input type="number" min={0} step={1000} value={m[vf]}
-                                    onChange={(e) => updateFerrMeta(v, vf, parseFloat(e.target.value) || 0)}
+                                  <ValorInput value={m[vf]}
+                                    onChange={(val) => updateFerrMeta(v, vf, val)}
                                     className="flex-1 min-w-0 rounded px-1 py-1 text-xs text-right outline-none bg-white font-medium"
                                     style={{ border: '1px solid #e2e8f0', color: '#0a1628' }}
-                                    placeholder="0" onFocus={(e) => e.target.select()} />
+                                    placeholder="0" />
                                   <input type="number" min={0} max={100} step={0.5} value={m[pf]}
                                     onChange={(e) => updateFerrMeta(v, pf, parseFloat(e.target.value) || 0)}
                                     className="w-12 rounded px-1 py-1 text-xs text-center outline-none font-bold"
@@ -925,11 +1181,11 @@ export default function ConfiguracaoPage() {
                                 <div key={f} className="flex items-center gap-1 mx-2 px-2 py-1.5 rounded-lg"
                                   style={{ background: bg, border: `1px solid ${border}` }}>
                                   <span className="text-xs shrink-0" style={{ color: '#64748b' }}>R$</span>
-                                  <input type="number" min={0} step={100} value={b[f]}
-                                    onChange={(e) => updateFerrBonus(v, f, parseFloat(e.target.value) || 0)}
+                                  <ValorInput value={b[f]}
+                                    onChange={(val) => updateFerrBonus(v, f, val)}
                                     className="flex-1 min-w-0 rounded px-1 py-1 text-xs text-right outline-none bg-white font-medium"
                                     style={{ border: '1px solid #e2e8f0', color: '#0a1628' }}
-                                    placeholder="0" onFocus={(e) => e.target.select()} />
+                                    placeholder="0" />
                                 </div>
                               ))}
                             </div>
@@ -988,10 +1244,10 @@ export default function ConfiguracaoPage() {
                                 <div className="flex items-center gap-1 rounded-lg px-2 py-1.5 bg-white"
                                   style={{ border: '1px solid #e2e8f0' }}>
                                   <span className="text-xs shrink-0" style={{ color: '#94a3b8' }}>R$</span>
-                                  <input type="number" min={0} step={5000} value={ferrMetaGrupoEdit[vf]}
-                                    onChange={(e) => updateFerrGrupo(vf, parseFloat(e.target.value) || 0)}
+                                  <ValorInput value={ferrMetaGrupoEdit[vf]}
+                                    onChange={(val) => updateFerrGrupo(vf, val)}
                                     className="flex-1 min-w-0 text-xs text-right outline-none font-medium bg-transparent"
-                                    style={{ color: '#0a1628' }} placeholder="0" onFocus={(e) => e.target.select()} />
+                                    style={{ color: '#0a1628' }} placeholder="0" />
                                 </div>
                               </div>
                               <div className="flex flex-col gap-1">
@@ -999,10 +1255,10 @@ export default function ConfiguracaoPage() {
                                 <div className="flex items-center gap-1 rounded-lg px-2 py-1.5 bg-white"
                                   style={{ border: '1px solid #e2e8f0' }}>
                                   <span className="text-xs shrink-0" style={{ color: '#94a3b8' }}>R$</span>
-                                  <input type="number" min={0} step={100} value={ferrMetaGrupoEdit[bf]}
-                                    onChange={(e) => updateFerrGrupo(bf, parseFloat(e.target.value) || 0)}
+                                  <ValorInput value={ferrMetaGrupoEdit[bf]}
+                                    onChange={(val) => updateFerrGrupo(bf, val)}
                                     className="flex-1 min-w-0 text-xs text-right outline-none font-medium bg-transparent"
-                                    style={{ color: '#0a1628' }} placeholder="0" onFocus={(e) => e.target.select()} />
+                                    style={{ color: '#0a1628' }} placeholder="0" />
                                 </div>
                               </div>
                               {ferrMetaGrupoEdit[vf] > 0 && (
@@ -1019,6 +1275,242 @@ export default function ConfiguracaoPage() {
                   </div>
                 )}
               </>
+            )}
+          </div>
+        )}
+
+        {/* ══════════════════════════════
+            ABA: DISTRIBUIDORES
+        ══════════════════════════════ */}
+        {aba === 'distribuidores' && (
+          <div className="space-y-5">
+            {/* Sub-abas Distribuidores */}
+            <div className="flex items-center gap-1 rounded-xl p-1 w-fit" style={{ background: '#f1f5f9' }}>
+              {([
+                { key: 'metas', label: 'Metas' },
+                { key: 'vinculos', label: 'Vínculos' },
+              ] as const).map((sub) => (
+                <button key={sub.key} onClick={() => setDistAba(sub.key)}
+                  className="px-4 py-1.5 rounded-lg text-sm font-semibold transition-all"
+                  style={{ background: distAba === sub.key ? '#00205C' : 'transparent', color: distAba === sub.key ? '#FFD700' : '#64748b' }}>
+                  {sub.label}
+                </button>
+              ))}
+            </div>
+
+            {distAba === 'metas' && (<>
+            {/* Período */}
+            <div className="rounded-xl p-4 flex items-center gap-5 flex-wrap"
+              style={{ background: '#ffffff', border: '2px solid #00205C' }}>
+              <div className="flex items-center gap-2 shrink-0">
+                <Calendar size={18} style={{ color: '#00205C' }} />
+                <span className="text-sm font-semibold" style={{ color: '#00205C' }}>Período de referência:</span>
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-xs font-medium uppercase tracking-wide" style={{ color: '#64748b' }}>Mês</label>
+                  <select value={distMesConf} onChange={(e) => setDistMesConf(parseInt(e.target.value))}
+                    className="rounded-lg px-3 py-2 text-sm font-semibold outline-none cursor-pointer"
+                    style={{ border: '1px solid #cbd5e1', color: '#00205C', minWidth: 140 }}>
+                    {MESES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-xs font-medium uppercase tracking-wide" style={{ color: '#64748b' }}>Ano</label>
+                  <select value={distAnoConf} onChange={(e) => setDistAnoConf(parseInt(e.target.value))}
+                    className="rounded-lg px-3 py-2 text-sm font-semibold outline-none cursor-pointer"
+                    style={{ border: '1px solid #cbd5e1', color: '#00205C', minWidth: 100 }}>
+                    {ANOS_META.map((a) => <option key={a} value={a}>{a}</option>)}
+                  </select>
+                </div>
+                <div className="px-3 py-1.5 rounded-lg text-sm font-bold mt-4"
+                  style={{ background: '#00205C', color: '#FFD700' }}>
+                  {MESES[distMesConf - 1]} {distAnoConf}
+                </div>
+              </div>
+            </div>
+
+            {loadingDist ? (
+              <div className="text-center py-12" style={{ color: '#94a3b8' }}>Carregando...</div>
+            ) : (
+              <div className="relative rounded-xl shadow-sm overflow-hidden"
+                style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+                <div className="flex items-center justify-between px-5 py-4 gap-3 flex-wrap"
+                  style={{ borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                  <div className="rounded-lg p-3 flex items-start gap-2 flex-1"
+                    style={{ background: '#0a1628', border: '1px solid #1a3a6e' }}>
+                    <AlertCircle size={15} style={{ color: '#FFD700' }} className="shrink-0 mt-0.5" />
+                    <p className="text-xs" style={{ color: '#94a3b8' }}>
+                      <strong className="text-white">Distribuidores:</strong> comissão calculada sobre o <strong className="text-white">total vendido</strong>.
+                      Se não bater nenhuma meta, aplica-se o <strong className="text-white">% Sem Meta</strong> sobre recebimentos.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <input
+                      type="text"
+                      value={distBuscaVend}
+                      onChange={(e) => setDistBuscaVend(e.target.value)}
+                      placeholder="Buscar vendedor..."
+                      className="rounded-lg px-3 py-1.5 text-sm outline-none"
+                      style={{ border: '1px solid #e2e8f0', color: '#0a1628', width: 200 }}
+                    />
+                    <button onClick={salvarDistMetas} disabled={savingDistMetas}
+                      className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-all"
+                      style={{ background: savingDistMetas ? '#e2e8f0' : savedDistMetas ? '#16a34a' : '#FFD700', color: savingDistMetas ? '#64748b' : savedDistMetas ? '#ffffff' : '#00205C' }}>
+                      {savingDistMetas ? <><Loader2 size={15} className="animate-spin" /> Salvando...</> : savedDistMetas ? <><CheckCircle size={15} /> Salvo!</> : <><Save size={15} /> Salvar Metas</>}
+                    </button>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <div className="grid px-5 py-2 text-xs font-semibold uppercase tracking-wider"
+                    style={{ gridTemplateColumns: '220px repeat(4, 200px) 120px', minWidth: 1200, borderBottom: '1px solid #f1f5f9', background: '#f8fafc', color: '#64748b' }}>
+                    <span>Vendedor</span>
+                    {['Meta 1', 'Meta 2', 'Meta 3', 'Meta Desafio'].map((l, i) => (
+                      <span key={i} className="text-center px-3 py-1 rounded-full mx-2"
+                        style={{ background: ['#dbeafe','#d1fae5','#fef3c7','#e9d5ff'][i], color: ['#1e40af','#065f46','#92400e','#6b21a8'][i] }}>{l}</span>
+                    ))}
+                    <span className="text-center px-2 py-1 rounded-full" style={{ background: '#fee2e2', color: '#991b1b' }}>% Sem Meta</span>
+                  </div>
+                  <div className="divide-y" style={{ borderColor: '#f1f5f9', minWidth: 1200 }}>
+                    {distVendedores.filter(v => !distBuscaVend || v.toLowerCase().includes(distBuscaVend.toLowerCase())).map((v) => {
+                      const m = getDistMeta(v);
+                      const temConf = !!distMetasEdit[v];
+                      return (
+                        <div key={v} className="grid items-center px-5 py-3"
+                          style={{ gridTemplateColumns: '220px repeat(4, 200px) 120px' }}
+                          onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = '#f8fafc')}
+                          onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = '')}>
+                          <div className="flex items-center gap-2 pr-3">
+                            <span className="text-sm font-medium" style={{ color: '#0a1628' }}>{v}</span>
+                            {temConf && <span className="text-xs px-1.5 py-0.5 rounded-full shrink-0" style={{ background: '#d1fae5', color: '#065f46' }}>✓</span>}
+                          </div>
+                          {([
+                            { vf: 'meta1_valor' as const, pf: 'meta1_percentual' as const, bg: '#eff6ff', border: '#bfdbfe' },
+                            { vf: 'meta2_valor' as const, pf: 'meta2_percentual' as const, bg: '#f0fdf4', border: '#bbf7d0' },
+                            { vf: 'meta3_valor' as const, pf: 'meta3_percentual' as const, bg: '#fffbeb', border: '#fde68a' },
+                            { vf: 'metadesafio_valor' as const, pf: 'metadesafio_percentual' as const, bg: '#fdf4ff', border: '#e9d5ff' },
+                          ]).map(({ vf, pf, bg, border }) => (
+                            <div key={vf} className="flex items-center gap-1 mx-2 px-2 py-1.5 rounded-lg"
+                              style={{ background: bg, border: `1px solid ${border}` }}>
+                              <span className="text-xs shrink-0" style={{ color: '#64748b' }}>R$</span>
+                              <ValorInput value={m[vf]}
+                                onChange={(val) => updateDistMeta(v, vf, val)}
+                                className="flex-1 min-w-0 rounded px-1 py-1 text-xs text-right outline-none bg-white font-medium"
+                                style={{ border: '1px solid #e2e8f0', color: '#0a1628' }}
+                                placeholder="0" />
+                              <input type="number" min={0} max={100} step={0.5} value={m[pf]}
+                                onChange={(e) => updateDistMeta(v, pf, parseFloat(e.target.value) || 0)}
+                                className="w-12 rounded px-1 py-1 text-xs text-center outline-none font-bold"
+                                style={{ border: '1px solid #e2e8f0', color: '#00205C', background: '#ffffff' }}
+                                placeholder="0" onFocus={(e) => e.target.select()} />
+                              <span className="text-xs shrink-0" style={{ color: '#64748b' }}>%</span>
+                            </div>
+                          ))}
+                          <div className="flex items-center gap-1 mx-2 px-2 py-1.5 rounded-lg"
+                            style={{ background: '#fff1f2', border: '1px solid #fecdd3' }}>
+                            <PctInput value={m.percentual_sem_meta}
+                              onChange={(val) => updateDistMeta(v, 'percentual_sem_meta', val)}
+                              className="flex-1 min-w-0 rounded px-1.5 py-1 text-xs text-center outline-none font-bold"
+                              style={{ border: '1px solid #e2e8f0', color: '#991b1b', background: '#ffffff' }}
+                              placeholder="0" />
+                            <span className="text-xs shrink-0" style={{ color: '#64748b' }}>%</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {distVendedores.length === 0 && (
+                      <div className="text-center py-10 text-sm" style={{ color: '#94a3b8' }}>
+                        Nenhum vendedor Distribuidores encontrado
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+            </>)}
+
+            {distAba === 'vinculos' && (
+              <div className="space-y-5">
+                <div className="rounded-xl p-4 flex items-start gap-3"
+                  style={{ background: '#0a1628', border: '1px solid #1a3a6e' }}>
+                  <AlertCircle size={18} style={{ color: '#FFD700' }} className="shrink-0 mt-0.5" />
+                  <p className="text-xs leading-relaxed" style={{ color: '#94a3b8' }}>
+                    <strong className="text-white">Vínculos entre representantes.</strong>{' '}
+                    Os pedidos às vezes saem no nome de um representante diferente (ex: &quot;DISTRIBUIDOR AFRANIO&quot;),
+                    mas devem contar como venda de outro vendedor principal (ex: &quot;DISTRIBUIDOR PRISCILA&quot;).
+                    Escolha aqui o vendedor vinculado e para qual principal as vendas e recebimentos dele devem ir.
+                  </p>
+                </div>
+
+                {loadingDistVinculos ? (
+                  <div className="text-center py-12" style={{ color: '#94a3b8' }}>Carregando...</div>
+                ) : (
+                  <div className="relative rounded-xl shadow-sm overflow-hidden"
+                    style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+                    <div className="flex items-center justify-between px-5 py-4 gap-3 flex-wrap"
+                      style={{ borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                      <p className="text-sm font-bold" style={{ color: '#00205C' }}>
+                        {Object.keys(distVinculos).length} vínculo(s) configurado(s)
+                      </p>
+                      <button onClick={salvarDistVinculos} disabled={savingDistVinculos}
+                        className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-semibold transition-all"
+                        style={{ background: savingDistVinculos ? '#e2e8f0' : savedDistVinculos ? '#16a34a' : '#FFD700', color: savingDistVinculos ? '#64748b' : savedDistVinculos ? '#ffffff' : '#00205C' }}>
+                        {savingDistVinculos ? <><Loader2 size={15} className="animate-spin" /> Salvando...</> : savedDistVinculos ? <><CheckCircle size={15} /> Salvo!</> : <><Save size={15} /> Salvar Vínculos</>}
+                      </button>
+                    </div>
+
+                    {/* Adicionar novo vínculo */}
+                    <div className="flex items-center gap-3 px-5 py-4 flex-wrap" style={{ borderBottom: '1px solid #f1f5f9', background: '#fafbfc' }}>
+                      <BuscaSelect
+                        value={novoVinculado}
+                        onChange={setNovoVinculado}
+                        options={distNomesRaw.filter(n => !distVinculos[n])}
+                        placeholder="Buscar vendedor vinculado..."
+                      />
+                      <span className="text-sm font-medium shrink-0" style={{ color: '#64748b' }}>vira vendas de</span>
+                      <BuscaSelect
+                        value={novoPrincipal}
+                        onChange={setNovoPrincipal}
+                        options={distNomesRaw.filter(n => n !== novoVinculado)}
+                        placeholder="Buscar vendedor principal..."
+                      />
+                      <button onClick={adicionarVinculo} disabled={!novoVinculado || !novoPrincipal}
+                        className="px-4 py-2 rounded-lg text-sm font-semibold shrink-0"
+                        style={{ background: !novoVinculado || !novoPrincipal ? '#e2e8f0' : '#00205C', color: !novoVinculado || !novoPrincipal ? '#94a3b8' : '#FFD700' }}>
+                        + Adicionar
+                      </button>
+                    </div>
+
+                    <div className="divide-y" style={{ borderColor: '#f1f5f9' }}>
+                      {Object.entries(distVinculos)
+                        .sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]))
+                        .map(([vinculado, principal]) => (
+                          <div key={vinculado} className="flex items-center justify-between px-5 py-3"
+                            onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = '#f8fafc')}
+                            onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = '')}>
+                            <div className="flex items-center gap-2 text-sm">
+                              <span className="font-medium" style={{ color: '#0a1628' }}>{vinculado}</span>
+                              <span style={{ color: '#94a3b8' }}>vira vendas de</span>
+                              <span className="px-2 py-0.5 rounded-full text-xs font-semibold" style={{ background: '#d1fae5', color: '#065f46' }}>
+                                {principal}
+                              </span>
+                            </div>
+                            <button onClick={() => removerVinculo(vinculado)}
+                              className="text-xs font-semibold px-2 py-1 rounded-lg"
+                              style={{ color: '#991b1b' }}>
+                              Remover
+                            </button>
+                          </div>
+                        ))}
+                      {Object.keys(distVinculos).length === 0 && (
+                        <div className="text-center py-10 text-sm" style={{ color: '#94a3b8' }}>
+                          Nenhum vínculo configurado
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}

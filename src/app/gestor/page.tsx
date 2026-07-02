@@ -5,6 +5,7 @@ import AppShell from '@/components/layout/AppShell';
 import { formatBRL, formatNumber, MESES, CORES_GRAFICO } from '@/lib/format';
 import { calcularComissaoTelevendas, type MetaConfig, type BonusConfig } from '@/lib/commission';
 import { calcularComissaoFerragens, type FerrMetaConfig, type FerrBonusConfig, type FerrMetaGrupoConfig } from '@/lib/commission-ferragens';
+import { calcularComissaoDistribuidores, type DistMetaConfig } from '@/lib/commission-distribuidores';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, LabelList,
@@ -53,6 +54,15 @@ interface FerrVendedorBonus {
   bonusdesafio_valor: number;
 }
 
+interface DistVendedorMeta {
+  nome_vendedor: string;
+  meta1_valor: number; meta1_percentual: number;
+  meta2_valor: number; meta2_percentual: number;
+  meta3_valor: number; meta3_percentual: number;
+  metadesafio_valor: number; metadesafio_percentual: number;
+  percentual_sem_meta: number;
+}
+
 export default function GestorPage() {
   const usuario = useUser();
   const router = useRouter();
@@ -71,6 +81,8 @@ export default function GestorPage() {
   const [ferrBonusMap, setFerrBonusMap] = useState<Record<string, FerrVendedorBonus>>({});
   const [ferrMetaGrupo, setFerrMetaGrupo] = useState<FerrMetaGrupoConfig | null>(null);
   const [ferrCarregado, setFerrCarregado] = useState(false);
+  const [distMetasMap, setDistMetasMap] = useState<Record<string, DistVendedorMeta>>({});
+  const [distCarregado, setDistCarregado] = useState(false);
 
   useEffect(() => {
     if (usuario && usuario !== 'loading' && usuario.cargo === 'VENDEDOR') {
@@ -123,6 +135,23 @@ export default function GestorPage() {
       .catch(err => {
         console.error('[gestor] ferragens/config:', err);
         setFerrCarregado(true);
+      });
+  }, [ano, mes]);
+
+  useEffect(() => {
+    setDistCarregado(false);
+    const mesFetch = mes || new Date().getMonth() + 1;
+    fetch(`/api/distribuidores/config?ano=${ano}&mes=${mesFetch}`)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(({ metas }) => {
+        const mm: Record<string, DistVendedorMeta> = {};
+        (metas as DistVendedorMeta[]).forEach(m => { mm[m.nome_vendedor] = m; });
+        setDistMetasMap(mm);
+        setDistCarregado(true);
+      })
+      .catch(err => {
+        console.error('[gestor] distribuidores/config:', err);
+        setDistCarregado(true);
       });
   }, [ano, mes]);
 
@@ -197,6 +226,20 @@ export default function GestorPage() {
     return calcularComissaoFerragens(v.total_vendas, v.total_recebido, metaCfg, bonusCfg, vendasSetorFerragens, ferrMetaGrupo);
   };
 
+  // Lógica Distribuidores: igual Ferragens (meta sobre total_vendas, comissão % sobre recebido), sem bônus
+  const getComissaoDist = (v: ResumoVendedor) => {
+    const mRec = distMetasMap[v.vendedor];
+    if (!mRec) return null;
+    const metaCfg: DistMetaConfig = {
+      meta1_valor: Number(mRec.meta1_valor), meta1_percentual: Number(mRec.meta1_percentual),
+      meta2_valor: Number(mRec.meta2_valor), meta2_percentual: Number(mRec.meta2_percentual),
+      meta3_valor: Number(mRec.meta3_valor), meta3_percentual: Number(mRec.meta3_percentual),
+      metadesafio_valor: Number(mRec.metadesafio_valor), metadesafio_percentual: Number(mRec.metadesafio_percentual),
+      percentual_sem_meta: Number(mRec.percentual_sem_meta ?? 0),
+    };
+    return calcularComissaoDistribuidores(v.total_vendas, v.total_recebido, metaCfg);
+  };
+
   const vendedoresFiltrados = vendedores.filter((v) =>
     !busca || v.vendedor.toLowerCase().includes(busca.toLowerCase())
   );
@@ -208,6 +251,7 @@ export default function GestorPage() {
   const totalEquipeExibido = todasTelevendas ? totalPA : totalVendas;
   const totalComissoes = vendedoresFiltrados.reduce((s, v) => {
     if (v.setor === 'FERRAGENS') return s + (getComissaoFerr(v)?.comissao_total ?? 0);
+    if (v.setor === 'DISTRIBUIDORES') return s + (getComissaoDist(v)?.comissao_total ?? 0);
     if (v.is_televendas) return s + (getComissaoTV(v)?.comissao_total ?? 0);
     return s + (getFaixa(v.vendedor, v.total_vendas)?.comissao ?? 0);
   }, 0);
@@ -218,6 +262,19 @@ export default function GestorPage() {
     const nome = partes.slice(1).join(' ') || partes[0];
     return nome.length > 14 ? nome.substring(0, 14) + '…' : nome;
   };
+
+  const isSetorTelevendas = filtroSetor === 'TELEVENDAS' || filtroSetor === 'TELEVENDAS MG';
+  const isSetorFaturamentoTotal = filtroSetor === 'FERRAGENS' || filtroSetor === 'DISTRIBUIDORES';
+  const legendaFaturamento = isSetorFaturamentoTotal
+    ? 'Faturamento'
+    : isSetorTelevendas
+      ? 'Venda PA'
+      : 'Faturamento (ou PA)';
+  const labelColunaVendas = isSetorFaturamentoTotal
+    ? 'Faturamento'
+    : isSetorTelevendas
+      ? 'Venda PA'
+      : 'Vendas';
 
   const top8Grafico = vendedoresFiltrados.slice(0, 8).map((v) => ({
     name: v.is_televendas ? `${nomeAbrev(v.vendedor)} (PA)` : nomeAbrev(v.vendedor),
@@ -233,6 +290,10 @@ export default function GestorPage() {
         const cf = getComissaoFerr(v);
         metaLabel = cf?.meta_atingida?.label || '-';
         comissao = cf ? cf.comissao_total.toFixed(2) : '-';
+      } else if (v.setor === 'DISTRIBUIDORES') {
+        const cd = getComissaoDist(v);
+        metaLabel = cd?.meta_atingida?.label || '-';
+        comissao = cd ? cd.comissao_total.toFixed(2) : '-';
       } else if (v.is_televendas) {
         const ctv = getComissaoTV(v);
         metaLabel = ctv?.meta_atingida?.label || '-';
@@ -383,7 +444,7 @@ export default function GestorPage() {
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-1.5">
                 <div className="w-3 h-3 rounded-sm" style={{ background: '#00205C' }} />
-                <span className="text-xs" style={{ color: '#64748b' }}>Faturamento (ou PA)</span>
+                <span className="text-xs" style={{ color: '#64748b' }}>{legendaFaturamento}</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="w-3 h-3 rounded-sm" style={{ background: '#FFD700' }} />
@@ -455,7 +516,7 @@ export default function GestorPage() {
                     { label: '#', align: 'left' },
                     { label: 'Vendedor', align: 'left' },
                     { label: 'Setor', align: 'left' },
-                    { label: 'Vendas / Valor PA', align: 'center' },
+                    { label: labelColunaVendas, align: 'center' },
                     { label: 'Meta Atingida', align: 'left' },
                     { label: 'Comissão Est.', align: 'center' },
                     { label: 'Atingimento', align: 'left' },
@@ -467,7 +528,7 @@ export default function GestorPage() {
                 </tr>
               </thead>
               <tbody>
-                {loading || !ferrCarregado ? (
+                {loading || !ferrCarregado || !distCarregado ? (
                   <tr>
                     <td colSpan={7} className="text-center py-8" style={{ color: '#94a3b8' }}>Carregando...</td>
                   </tr>
@@ -478,12 +539,14 @@ export default function GestorPage() {
                 ) : (
                   vendedoresFiltrados.map((v, i) => {
                     const isFerragens = v.setor === 'FERRAGENS';
+                    const isDist = v.setor === 'DISTRIBUIDORES';
                     const cferr = isFerragens ? getComissaoFerr(v) : null;
-                    const ctv = !isFerragens && v.is_televendas ? getComissaoTV(v) : null;
-                    const f = !isFerragens && !v.is_televendas ? getFaixa(v.vendedor, v.total_vendas) : null;
+                    const cdist = isDist ? getComissaoDist(v) : null;
+                    const ctv = !isFerragens && !isDist && v.is_televendas ? getComissaoTV(v) : null;
+                    const f = !isFerragens && !isDist && !v.is_televendas ? getFaixa(v.vendedor, v.total_vendas) : null;
 
-                    // Coluna "Total Vendas / Valor PA"
-                    const vendaCell = isFerragens ? (
+                    // Coluna "Total Vendas"
+                    const vendaCell = isFerragens || isDist ? (
                       <div>
                         <span className="font-semibold" style={{ color: '#00205C' }}>{formatBRL(v.total_vendas)}</span>
                         {v.total_recebido > 0 && (
@@ -503,32 +566,39 @@ export default function GestorPage() {
                     );
 
                     // Meta atingida — só considera "cadastrada" se tiver ao menos um valor real > 0
-                    const mTV = !isFerragens ? metasMap[v.vendedor] : undefined;
+                    const mTV = !isFerragens && !isDist ? metasMap[v.vendedor] : undefined;
                     const mFerr = isFerragens ? ferrMetasMap[v.vendedor] : undefined;
+                    const mDist = isDist ? distMetasMap[v.vendedor] : undefined;
                     const temMetaCadastrada = isFerragens
                       ? !!(mFerr && (mFerr.meta1_valor > 0 || mFerr.meta2_valor > 0 || mFerr.meta3_valor > 0 || mFerr.metadesafio_valor > 0))
-                      : !!(mTV && (mTV.meta1_valor > 0 || mTV.meta2_valor > 0 || mTV.meta3_valor > 0));
-                    const metaLabel = isFerragens ? cferr?.meta_atingida?.label : v.is_televendas ? ctv?.meta_atingida?.label : f?.atingida?.label;
-                    const metaValor = isFerragens ? cferr?.meta_atingida?.valor : v.is_televendas ? ctv?.meta_atingida?.valor : f?.atingida?.valor;
+                      : isDist
+                        ? !!(mDist && (mDist.meta1_valor > 0 || mDist.meta2_valor > 0 || mDist.meta3_valor > 0 || mDist.metadesafio_valor > 0))
+                        : !!(mTV && (mTV.meta1_valor > 0 || mTV.meta2_valor > 0 || mTV.meta3_valor > 0));
+                    const metaLabel = isFerragens ? cferr?.meta_atingida?.label : isDist ? cdist?.meta_atingida?.label : v.is_televendas ? ctv?.meta_atingida?.label : f?.atingida?.label;
+                    const metaValor = isFerragens ? cferr?.meta_atingida?.valor : isDist ? cdist?.meta_atingida?.valor : v.is_televendas ? ctv?.meta_atingida?.valor : f?.atingida?.valor;
 
                     // Comissão estimada — sem meta = 0; com meta sem faixa = percentual_sem_meta
                     const comissaoDisplay = !temMetaCadastrada
                       ? 0
                       : isFerragens
                         ? (cferr?.comissao_total ?? 0)
-                        : v.is_televendas
-                          ? (ctv?.comissao_total ?? 0)
-                          : f?.comissao != null
-                            ? f.comissao
-                            : (Number(mTV?.percentual_sem_meta ?? 0) / 100) * v.total_vendas;
+                        : isDist
+                          ? (cdist?.comissao_total ?? 0)
+                          : v.is_televendas
+                            ? (ctv?.comissao_total ?? 0)
+                            : f?.comissao != null
+                              ? f.comissao
+                              : (Number(mTV?.percentual_sem_meta ?? 0) / 100) * v.total_vendas;
 
                     // Atingimento (barra de progresso)
                     const metaRef = isFerragens
                       ? (Number(ferrMetasMap[v.vendedor]?.meta1_valor) || 0)
-                      : v.is_televendas
-                        ? (Number(metasMap[v.vendedor]?.meta1_valor) || 0)
-                        : (f?.referencia ?? 0);
-                    const realizado = isFerragens ? v.total_vendas : v.is_televendas ? v.valor_pa : v.total_vendas;
+                      : isDist
+                        ? (Number(distMetasMap[v.vendedor]?.meta1_valor) || 0)
+                        : v.is_televendas
+                          ? (Number(metasMap[v.vendedor]?.meta1_valor) || 0)
+                          : (f?.referencia ?? 0);
+                    const realizado = isFerragens || isDist ? v.total_vendas : v.is_televendas ? v.valor_pa : v.total_vendas;
                     const pct = metaRef > 0 ? Math.min((realizado / metaRef) * 100, 100) : 0;
 
                     return (

@@ -3,6 +3,7 @@ import { queryMySQL } from './mysql-ext';
 import { getPool, sql } from './db';
 import { fbSJC, fbSPM, fbLockeyMG, fbLockey, fbLockeyRJ, fbLockeyBH, myLockeyRS, myNiteroi } from './db-externas';
 import { SETORES_ATIVOS } from './setores';
+import { ensureDistTables } from './distribuidores-tables';
 
 // ─── Tipos normalizados (mesmos nomes de coluna do SQL Server) ───────────────
 
@@ -188,6 +189,12 @@ function normalizarNomeFerragens(nome: string): string {
   return `${words[0] ?? ''} ${words[1] ?? ''}`.trim();
 }
 
+// Aplica o vínculo Distribuidores (vendedor "filho" → vendedor "principal"), configurável em Configuração
+function aplicarVinculo(nome: string | null, vinculos: Record<string, string>): string | null {
+  if (!nome) return nome;
+  return vinculos[nome.toUpperCase()] ?? nome;
+}
+
 function normalizeVendas(raw: Record<string, unknown>[]): VendaRow[] {
   return raw.map(r => {
     const rvs = str(r.rvs_nome);
@@ -220,6 +227,54 @@ function normalizeReceb(raw: Record<string, unknown>[]): RecebRow[] {
       DATABAIXA: toDate(r.databaixa ?? r.DataBaixa),
     };
   });
+}
+
+// Mapa VENDEDOR_VINCULADO → VENDEDOR_PRINCIPAL (Distribuidores), configurável em Configuração.
+// Cache curto (1 min) — evita bater no SQL Server a cada request sem deixar o vínculo travado por 15 min.
+const VINC_TTL = 60 * 1000;
+let _vinculosCache: { map: Record<string, string>; ts: number } | null = null;
+
+async function getVinculosDistribuidoresMap(): Promise<Record<string, string>> {
+  if (_vinculosCache && Date.now() - _vinculosCache.ts < VINC_TTL) return _vinculosCache.map;
+  try {
+    await ensureDistTables();
+    const pool = await getPool();
+    const res = await pool.request().query(
+      `SELECT VENDEDOR_VINCULADO, VENDEDOR_PRINCIPAL FROM [TI-PAINELCOMISSAO_DISTRIBUIDORES_VINCULOS]`
+    );
+    const map: Record<string, string> = {};
+    res.recordset.forEach((r: Record<string, unknown>) => {
+      const vinc = str(r.VENDEDOR_VINCULADO)?.toUpperCase();
+      const princ = str(r.VENDEDOR_PRINCIPAL)?.toUpperCase();
+      if (vinc && princ) map[vinc] = princ;
+    });
+    _vinculosCache = { map, ts: Date.now() };
+    return map;
+  } catch (err) {
+    console.error('[dados-externos] vinculos distribuidores:', (err as Error)?.message ?? err);
+    return _vinculosCache?.map ?? {};
+  }
+}
+
+// Chamado ao salvar os vínculos em Configuração, para o efeito ser imediato
+export function invalidarCacheVinculos() {
+  _vinculosCache = null;
+}
+
+// Lista bruta (sem vínculo aplicado) dos representantes Distribuidores que já têm vendas
+// registradas — usa exatamente as mesmas fontes (Firebird/MySQL/EP) que alimentam o resto do
+// painel, para não deixar de fora representantes que não vêm do sistema EP.
+export async function getDistribuidoresNomesRaw(): Promise<string[]> {
+  const anoAtual = new Date().getFullYear();
+  const anos = [anoAtual, anoAtual - 1, anoAtual - 2];
+  const nomes = new Set<string>();
+  for (const ano of anos) {
+    const rows = await getVendasBrutas(ano);
+    rows.forEach(r => {
+      if (r.RVS_NOME === 'DISTRIBUIDORES' && r.USU_NOME) nomes.add(r.USU_NOME);
+    });
+  }
+  return [...nomes].sort();
 }
 
 // ─── EP (SQL Server principal) ───────────────────────────────────────────────
@@ -270,8 +325,11 @@ async function queryEPVendas(ano: number): Promise<VendaRow[]> {
 }
 
 // ─── Fetch + cache ────────────────────────────────────────────────────────────
+// O cache guarda as linhas BRUTAS (sem vínculo Distribuidores aplicado). O vínculo é
+// aplicado na leitura (getVendas/getRecebimentos), assim uma alteração no vínculo tem
+// efeito imediato sem precisar invalidar/refazer as consultas nos bancos externos.
 
-export function getVendas(ano: number): Promise<VendaRow[]> {
+function getVendasBrutas(ano: number): Promise<VendaRow[]> {
   const hit = _cv.get(ano);
   if (hit && Date.now() - hit.ts < TTL) return Promise.resolve(hit.rows);
 
@@ -309,7 +367,7 @@ export function getVendas(ano: number): Promise<VendaRow[]> {
   return promise;
 }
 
-export function getRecebimentos(ano: number): Promise<RecebRow[]> {
+function getRecebimentosBrutos(ano: number): Promise<RecebRow[]> {
   const hit = _cr.get(ano);
   if (hit && Date.now() - hit.ts < TTL) return Promise.resolve(hit.rows);
 
@@ -342,6 +400,24 @@ export function getRecebimentos(ano: number): Promise<RecebRow[]> {
 
   _inFlightR.set(ano, promise);
   return promise;
+}
+
+export async function getVendas(ano: number): Promise<VendaRow[]> {
+  const [rows, vinculos] = await Promise.all([getVendasBrutas(ano), getVinculosDistribuidoresMap()]);
+  if (Object.keys(vinculos).length === 0) return rows;
+  return rows.map(r => {
+    const usu = aplicarVinculo(r.USU_NOME, vinculos);
+    return usu === r.USU_NOME ? r : { ...r, USU_NOME: usu };
+  });
+}
+
+export async function getRecebimentos(ano: number): Promise<RecebRow[]> {
+  const [rows, vinculos] = await Promise.all([getRecebimentosBrutos(ano), getVinculosDistribuidoresMap()]);
+  if (Object.keys(vinculos).length === 0) return rows;
+  return rows.map(r => {
+    const rep = aplicarVinculo(r.REP_NOME, vinculos);
+    return rep === r.REP_NOME ? r : { ...r, REP_NOME: rep };
+  });
 }
 
 export function invalidarCache() {

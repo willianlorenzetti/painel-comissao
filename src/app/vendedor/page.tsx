@@ -8,6 +8,7 @@ import { DollarSign, TrendingUp, ChevronDown, Search, User } from 'lucide-react'
 import { useUser } from '@/components/providers/UserProvider';
 import { calcularComissaoTelevendas, type MetaConfig, type BonusConfig } from '@/lib/commission';
 import { calcularComissaoFerragens, type FerrMetaConfig, type FerrBonusConfig, type FerrMetaGrupoConfig, type ComissaoFerragens } from '@/lib/commission-ferragens';
+import { calcularComissaoDistribuidores, type DistMetaConfig, type ComissaoDistribuidores } from '@/lib/commission-distribuidores';
 
 const ANO_ATUAL = new Date().getFullYear();
 const ANOS = [ANO_ATUAL, ANO_ATUAL - 1, ANO_ATUAL - 2];
@@ -24,6 +25,7 @@ interface VendedorData {
   } | null;
   is_televendas?: boolean;
   is_ferragens?: boolean;
+  is_distribuidores?: boolean;
   valor_pa?: number;
   valor_chave?: number;
   valor_ferragens_pa?: number;
@@ -43,6 +45,8 @@ interface VendedorData {
   ferr_bonus?: FerrBonusConfig | null;
   ferr_meta_grupo?: FerrMetaGrupoConfig | null;
   vendas_setor_ferragens?: number;
+  comissao_distribuidores?: ComissaoDistribuidores | null;
+  dist_meta?: DistMetaConfig | null;
 }
 
 interface ComissaoConfig { setor: string; percentual: number; meta_mensal: number; }
@@ -152,6 +156,7 @@ export default function VendedorPage() {
 
   const isTelevendas = data?.is_televendas ?? false;
   const isFerragens = data?.is_ferragens ?? false;
+  const isDistribuidores = data?.is_distribuidores ?? false;
   const bonusConfigData: BonusConfig | null = data?.bonus_config ?? null;
   const valorPAAtual = data?.valor_pa ?? 0;
   const recebidoAtual = data?.total_recebido ?? 0;
@@ -183,17 +188,33 @@ export default function VendedorPage() {
     : [];
   const cfv = isFerragens && mes ? data?.comissao_ferragens ?? null : null;
 
+  // Distribuidores — mesmas faixas de meta do Ferragens (4 níveis: M1, M2, M3, Desafio)
+  const distMeta = data?.dist_meta ?? null;
+  const distFaixas: { label: string; valor: number; percentual: number }[] = distMeta
+    ? [
+        { label: 'Meta 1', valor: distMeta.meta1_valor, percentual: distMeta.meta1_percentual },
+        { label: 'Meta 2', valor: distMeta.meta2_valor, percentual: distMeta.meta2_percentual },
+        { label: 'Meta 3', valor: distMeta.meta3_valor, percentual: distMeta.meta3_percentual },
+        { label: 'Meta Desafio', valor: distMeta.metadesafio_valor, percentual: distMeta.metadesafio_percentual },
+      ].filter(f => f.valor > 0)
+    : [];
+  const cdv = isDistribuidores && mes ? data?.comissao_distribuidores ?? null : null;
+
   const temMetaDefinida = isFerragens
     ? ferrFaixas.length > 0
+    : isDistribuidores
+    ? distFaixas.length > 0
     : faixas.some((f) => f.valor > 0);
 
   const compareRealizado = isTelevendas ? valorPAAtual : totalVendas;
-  const faixasExibidas = isFerragens ? ferrFaixas : faixas;
+  const faixasExibidas = isFerragens ? ferrFaixas : isDistribuidores ? distFaixas : faixas;
   const faixaAtingida = [...faixasExibidas].reverse().find((f) => f.valor > 0 && compareRealizado >= f.valor) || null;
   const comissaoValor = isTelevendas
     ? (ctv?.comissao_total ?? null)
     : isFerragens
     ? (cfv?.comissao_total ?? null)
+    : isDistribuidores
+    ? (cdv?.comissao_total ?? null)
     : faixaAtingida ? (totalVendas * faixaAtingida.percentual) / 100 : null;
 
   // Projeção do mês — baseada em dias úteis (seg–sex)
@@ -218,10 +239,15 @@ export default function VendedorPage() {
   const projecaoFerragens = isFerragens && projecaoVendas > 0
     ? calcularComissaoFerragens(projecaoVendas, recebidoAtual, ferrMeta, ferrBonus, data?.vendas_setor_ferragens ?? 0, ferrMetaGrupo)
     : null;
+  const projecaoDistribuidores = isDistribuidores && projecaoVendas > 0
+    ? calcularComissaoDistribuidores(projecaoVendas, recebidoAtual, distMeta)
+    : null;
   const projecaoComissao = isTelevendas
     ? (ctvProjecao?.comissao_total ?? null)
     : isFerragens
     ? (projecaoFerragens?.comissao_total ?? null)
+    : isDistribuidores
+    ? (projecaoDistribuidores?.comissao_total ?? null)
     : faixaProjetada ? (projecaoVendas * faixaProjetada.percentual) / 100 : null;
 
   return (
@@ -585,6 +611,74 @@ export default function VendedorPage() {
                 </p>
                 <p className="text-xs mt-1" style={{ color: '#64748b' }}>
                   Meta + Bônus individual + Bônus grupo
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Comissão Distribuidores — bloco detalhado para DISTRIBUIDORES */}
+        {isDistribuidores && mes && cdv && (
+          <div className="grid grid-cols-2 gap-4">
+
+            {/* Vendas Breakdown */}
+            <div className="rounded-xl p-5 shadow-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+              <h2 className="text-sm font-bold mb-4" style={{ color: '#00205C' }}>Vendas Distribuidores — {MESES[mesSel - 1]}</h2>
+              <div className="space-y-3">
+                {[
+                  { label: 'Total Vendido', valor: cdv.vendas_total, color: '#00205C', bg: '#f8fafc', bold: true },
+                  { label: 'Recebimentos', valor: cdv.recebido, color: '#92400e', bg: '#fffbeb' },
+                ].map((row, i) => (
+                  <div key={i} className="flex justify-between items-center py-1.5 px-3 rounded-lg text-sm"
+                    style={{ background: row.bg }}>
+                    <span style={{ color: '#64748b', fontWeight: row.bold ? 700 : 400 }}>{row.label}</span>
+                    <span style={{ color: row.color, fontWeight: row.bold ? 700 : 600 }}>{formatBRL(row.valor)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Comissão Detalhada */}
+            <div className="rounded-xl p-5 shadow-sm" style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
+              <h2 className="text-sm font-bold mb-4" style={{ color: '#00205C' }}>Comissão Distribuidores — {MESES[mesSel - 1]}</h2>
+
+              {/* Meta atingida */}
+              <div className="rounded-lg p-3 mb-3" style={{
+                background: cdv.meta_atingida ? '#f0fdf4' : '#fff1f2',
+                border: `1px solid ${cdv.meta_atingida ? '#bbf7d0' : '#fecdd3'}`
+              }}>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs font-semibold" style={{ color: cdv.meta_atingida ? '#065f46' : '#991b1b' }}>
+                    {cdv.meta_atingida ? `${cdv.meta_atingida.label} atingida ✓` : 'Nenhuma meta atingida'}
+                  </span>
+                  {cdv.meta_atingida && (
+                    <span className="text-xs font-bold" style={{ color: '#065f46' }}>
+                      {cdv.meta_atingida.percentual}% × recebimentos
+                    </span>
+                  )}
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span style={{ color: '#64748b' }}>Comissão meta</span>
+                  <span className="font-bold" style={{ color: cdv.meta_atingida ? '#16a34a' : '#dc2626' }}>
+                    {formatBRL(cdv.comissao_meta)}
+                  </span>
+                </div>
+                {!cdv.meta_atingida && distMeta && distMeta.percentual_sem_meta > 0 && (
+                  <p className="text-xs mt-1" style={{ color: '#94a3b8' }}>
+                    Aplicado {distMeta.percentual_sem_meta}% (% sem meta) sobre recebimentos
+                  </p>
+                )}
+              </div>
+
+              {/* Total */}
+              <div className="rounded-lg p-4 text-center"
+                style={{ background: '#00205C', border: '1px solid #1a3a6e' }}>
+                <p className="text-xs uppercase tracking-wide mb-1" style={{ color: '#94a3b8' }}>Total Comissão</p>
+                <p className="text-2xl font-bold" style={{ color: '#FFD700' }}>
+                  {formatBRL(cdv.comissao_total)}
+                </p>
+                <p className="text-xs mt-1" style={{ color: '#64748b' }}>
+                  % da meta sobre recebimentos
                 </p>
               </div>
             </div>

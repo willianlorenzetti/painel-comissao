@@ -4,6 +4,8 @@ import { getUsuario, podeVerTudo } from '@/lib/permissions';
 import { calcularComissaoTelevendas, isTelevendas, type MetaConfig, type BonusConfig } from '@/lib/commission';
 import { calcularComissaoFerragens, isFerragens, type FerrMetaConfig, type FerrBonusConfig, type FerrMetaGrupoConfig } from '@/lib/commission-ferragens';
 import { ensureFerrTables } from '@/lib/ferragens-tables';
+import { calcularComissaoDistribuidores, isDistribuidores, type DistMetaConfig } from '@/lib/commission-distribuidores';
+import { ensureDistTables } from '@/lib/distribuidores-tables';
 import {
   getVendas, getRecebimentos,
   filtrarVendas, filtrarReceb,
@@ -125,6 +127,7 @@ export async function GET(
     const setor = resumo[0]?.setor ?? '';
     const is_televendas = isTelevendas(setor);
     const is_ferragens = isFerragens(setor);
+    const is_distribuidores = isDistribuidores(setor);
 
     const pool = await getPool();
 
@@ -170,7 +173,7 @@ export async function GET(
 
     // Recebimentos do vendedor no período
     let total_recebido = 0;
-    if ((is_televendas || is_ferragens) && mes) {
+    if ((is_televendas || is_ferragens || is_distribuidores) && mes) {
       total_recebido = somarReceb(
         filtrarReceb(todosReceb, { inicio: dataInicio, fim: dataFim, vendedor })
       );
@@ -250,6 +253,35 @@ export async function GET(
       }
     }
 
+    // ── Distribuidores ───────────────────────────────────────────────────────
+    let comissao_distribuidores = null;
+    let dist_meta: DistMetaConfig | null = null;
+
+    if (is_distribuidores && mes) {
+      try {
+        await ensureDistTables();
+        const distMetaRes = await pool.request()
+          .input('dv', sql.VarChar, vendedor)
+          .input('da', sql.Int, ano)
+          .input('dm', sql.Int, parseInt(mes))
+          .query(`SELECT META1_VALOR as meta1_valor, META1_PERCENTUAL as meta1_percentual,
+                         META2_VALOR as meta2_valor, META2_PERCENTUAL as meta2_percentual,
+                         META3_VALOR as meta3_valor, META3_PERCENTUAL as meta3_percentual,
+                         METADESAFIO_VALOR as metadesafio_valor, METADESAFIO_PERCENTUAL as metadesafio_percentual,
+                         PERCENTUAL_SEM_META as percentual_sem_meta
+                  FROM [TI-PAINELCOMISSAO_DISTRIBUIDORES_METAS]
+                  WHERE VENDEDOR=@dv AND ANO=@da AND MES=@dm`)
+          .catch(() => ({ recordset: [] as Array<Record<string, unknown>> }));
+
+        if (distMetaRes.recordset.length) dist_meta = distMetaRes.recordset[0] as unknown as DistMetaConfig;
+
+        const vendas_total_vendedor_dist = vendasPeriodo.reduce((s, v) => s + v.SUM, 0);
+        comissao_distribuidores = calcularComissaoDistribuidores(vendas_total_vendedor_dist, total_recebido, dist_meta);
+      } catch (e) {
+        console.error('[vendedor distribuidores]', e);
+      }
+    }
+
     return NextResponse.json({
       resumo,
       mensal,
@@ -258,6 +290,7 @@ export async function GET(
       meta_vendedor: metaVendedor.recordset[0] || null,
       is_televendas,
       is_ferragens,
+      is_distribuidores,
       valor_pa,
       valor_chave,
       valor_ferragens_pa,
@@ -270,6 +303,8 @@ export async function GET(
       ferr_bonus,
       ferr_meta_grupo,
       vendas_setor_ferragens,
+      comissao_distribuidores,
+      dist_meta,
     });
   } catch (error) {
     console.error('Erro ao buscar vendedor:', error);
